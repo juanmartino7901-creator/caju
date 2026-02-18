@@ -1,9 +1,16 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
-// CAJÚ — Complete MVP — Mobile Responsive
+// CAJÚ — Complete MVP — Mobile Responsive — Supabase Connected
 // ============================================================
+
+// ─── Supabase Client ─────────────────────────────────────────
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 const BANK_CODES = { "Itaú": "113", "BROU": "1", "Santander": "137", "Scotiabank": "128", "BBVA": "153", "HSBC": "157", "Bandes": "110", "Citibank": "205" };
 
@@ -37,70 +44,6 @@ function useIsMobile() {
     return () => window.removeEventListener("resize", h);
   }, []);
   return w < 768;
-}
-
-// ============================================================
-// INITIAL DATA
-// ============================================================
-function initSuppliers() {
-  return [
-    { id: "s1", name: "Distribuidora del Este S.A.", alias: "Dist. Este", tax_id: "21.234.567.0001", category: "Insumos", bank: "Itaú", account_type: "CC", account_number: "1234567", currency: "UYU", phone: "2604 5678", email: "ventas@disteste.com.uy", contact: "María López", payment_terms: "30 días", notes: "" },
-    { id: "s2", name: "Frigorífico Nacional S.A.", alias: "Frigo Nacional", tax_id: "21.098.765.0001", category: "Carnes", bank: "BROU", account_type: "CA", account_number: "9876543210", currency: "UYU", phone: "2908 1234", email: "pagos@frigonal.com.uy", contact: "Carlos Pérez", payment_terms: "15 días", notes: "Descuento 2% contado" },
-    { id: "s3", name: "Panadería La Rica", alias: "Pan La Rica", tax_id: "21.555.333.0001", category: "Panificados", bank: "Itaú", account_type: "CC", account_number: "7654321", currency: "UYU", phone: "099 123 456", email: "larica@gmail.com", contact: "Roberto Silva", payment_terms: "Contado", notes: "" },
-    { id: "s4", name: "Envases Uruguay S.A.", alias: "Envases UY", tax_id: "21.777.888.0001", category: "Packaging", bank: "Santander", account_type: "CC", account_number: "456789012345", currency: "UYU", phone: "2707 9988", email: "compras@envaseuy.com.uy", contact: "Ana García", payment_terms: "30 días", notes: "" },
-    { id: "s5", name: "Transporte Rápido SRL", alias: "Transp Rápido", tax_id: "21.444.222.0001", category: "Logística", bank: "Itaú", account_type: "CA", account_number: "3456789", currency: "UYU", phone: "099 876 543", email: "admin@transporterapido.uy", contact: "Diego Martínez", payment_terms: "15 días", notes: "" },
-    { id: "s6", name: "Limpieza Total S.A.", alias: "Limp Total", tax_id: "21.666.999.0001", category: "Servicios", bank: "BROU", account_type: "CC", account_number: "1122334455", currency: "UYU", phone: "2901 4455", email: "contacto@limpiezatotal.uy", contact: "Laura Fernández", payment_terms: "Contado", notes: "" },
-    { id: "s7", name: "Inmobiliaria Punta", alias: "Inmob Punta", tax_id: "21.321.654.0001", category: "Alquiler", bank: "Itaú", account_type: "CC", account_number: "9988776", currency: "UYU", phone: "2710 3344", email: "cobros@inmobpunta.com.uy", contact: "Fabiana Rodríguez", payment_terms: "Mensual", notes: "Contrato hasta Dic 2027" },
-    { id: "s8", name: "UTE", alias: "UTE", tax_id: "21.100.100.0001", category: "Servicios", bank: "BROU", account_type: "—", account_number: "—", currency: "UYU", phone: "0800 1930", email: "—", contact: "—", payment_terms: "Mensual", notes: "Pago por Abitab/Red Pagos" },
-    { id: "s9", name: "OSE", alias: "OSE", tax_id: "21.200.200.0001", category: "Servicios", bank: "BROU", account_type: "—", account_number: "—", currency: "UYU", phone: "0800 1871", email: "—", contact: "—", payment_terms: "Mensual", notes: "" },
-    { id: "s10", name: "BSE", alias: "BSE Seguros", tax_id: "21.300.300.0001", category: "Seguros", bank: "BROU", account_type: "CC", account_number: "5566778899", currency: "UYU", phone: "1998", email: "—", contact: "—", payment_terms: "Mensual", notes: "Póliza incendio + robo" },
-  ];
-}
-
-function initInvoices() {
-  const data = [
-    { sid: "s1", num: "FA-001234", series: "A", issue: "2026-01-28", due: "2026-02-27", total: 45200, source: "email" },
-    { sid: "s2", num: "FA-005678", series: "B", issue: "2026-02-05", due: "2026-02-20", total: 128500, source: "paper" },
-    { sid: "s3", num: "FA-000891", series: "A", issue: "2026-02-10", due: "2026-02-18", total: 18700, source: "whatsapp" },
-    { sid: "s4", num: "FA-002345", series: "E", issue: "2026-02-01", due: "2026-02-28", total: 32100, source: "email" },
-    { sid: "s5", num: "FA-003456", series: "A", issue: "2026-02-08", due: "2026-02-28", total: 22800, source: "paper" },
-    { sid: "s6", num: "FA-004567", series: "A", issue: "2026-02-12", due: "2026-02-20", total: 8900, source: "email" },
-    { sid: "s1", num: "FA-001300", series: "A", issue: "2026-02-14", due: "2026-03-16", total: 38500, source: "email" },
-    { sid: "s2", num: "FA-005700", series: "B", issue: "2026-02-13", due: "2026-02-28", total: 96200, source: "paper" },
-    { sid: "s4", num: "FA-002400", series: "E", issue: "2026-02-15", due: "2026-03-15", total: 27800, source: "email" },
-    { sid: "s3", num: "FA-000920", series: "A", issue: "2026-02-16", due: "2026-02-16", total: 12400, source: "whatsapp" },
-  ];
-  const statuses = ["APPROVED", "EXTRACTED", "REVIEW_REQUIRED", "APPROVED", "SCHEDULED", "EXTRACTED", "NEW", "NEW", "APPROVED", "REVIEW_REQUIRED"];
-  return data.map((d, i) => {
-    const tax = Math.round(d.total * 0.22 / 1.22);
-    return {
-      id: `inv-${String(i + 1).padStart(3, "0")}`, supplier_id: d.sid, invoice_number: d.num, series: d.series,
-      issue_date: d.issue, due_date: d.due, currency: "UYU", subtotal: d.total - tax, tax_amount: tax, total: d.total,
-      status: statuses[i], source: d.source,
-      confidence: { supplier_name: 0.95, tax_id: 0.92, invoice_number: 0.98, issue_date: 0.97, total: 0.99, due_date: i === 2 ? 0.72 : 0.88, currency: 1.0, tax_amount: 0.90 },
-      created_at: d.issue + "T10:00:00", payment_date: null,
-      events: [
-        { type: "created", by: i < 5 ? "Empleado" : "Sistema", at: d.issue, note: `Subida desde ${d.source}` },
-        { type: "extracted", by: "AI (Claude)", at: d.issue, note: "Extracción completada" },
-      ],
-    };
-  });
-}
-
-function initRecurring() {
-  return [
-    { id: "r1", type: "fixed_cost", name: "Alquiler Local", amount: 85000, currency: "UYU", frequency: "monthly", day: 5, category: "Alquiler", active: true, supplier_id: "s7", variable: false },
-    { id: "r2", type: "fixed_cost", name: "UTE (Electricidad)", amount: 18000, currency: "UYU", frequency: "monthly", day: 15, category: "Servicios", active: true, supplier_id: "s8", variable: true },
-    { id: "r3", type: "fixed_cost", name: "OSE (Agua)", amount: 4500, currency: "UYU", frequency: "monthly", day: 20, category: "Servicios", active: true, supplier_id: "s9", variable: true },
-    { id: "r4", type: "fixed_cost", name: "IMM (Tributo)", amount: 3200, currency: "UYU", frequency: "monthly", day: 10, category: "Impuestos", active: true, supplier_id: null, variable: false },
-    { id: "r5", type: "fixed_cost", name: "Seguro Local", amount: 12000, currency: "UYU", frequency: "monthly", day: 1, category: "Seguros", active: true, supplier_id: "s10", variable: false },
-    { id: "r6", type: "fixed_cost", name: "Antel Internet+Tel", amount: 3500, currency: "UYU", frequency: "monthly", day: 12, category: "Servicios", active: true, supplier_id: null, variable: false },
-    { id: "r7", type: "fixed_cost", name: "Software POS", amount: 2500, currency: "UYU", frequency: "monthly", day: 1, category: "Suscripciones", active: true, supplier_id: null, variable: false },
-    { id: "r8", type: "owner_withdrawal", name: "Retiro Juan", amount: 120000, currency: "UYU", frequency: "monthly", day: 25, category: "Retiro", active: true, supplier_id: null, variable: false },
-    { id: "r9", type: "installment", name: "Horno Industrial", amount: 15000, currency: "UYU", frequency: "monthly", day: 8, category: "Tarjeta", active: true, supplier_id: null, variable: false, total_installments: 12, current_installment: 5, card_last4: "4521" },
-    { id: "r10", type: "installment", name: "Cámara Frigorífica", amount: 22000, currency: "UYU", frequency: "monthly", day: 8, category: "Tarjeta", active: true, supplier_id: null, variable: false, total_installments: 18, current_installment: 3, card_last4: "4521" },
-    { id: "r11", type: "installment", name: "Mostrador Exhibidor", amount: 8500, currency: "UYU", frequency: "monthly", day: 8, category: "Tarjeta", active: true, supplier_id: null, variable: false, total_installments: 6, current_installment: 4, card_last4: "7832" },
-  ];
 }
 
 // Helpers
@@ -167,25 +110,182 @@ const Progress = ({ current, total, color = "#e85d04" }) => <div style={{ displa
 </div>;
 
 // ============================================================
+// LOADING SCREEN
+// ============================================================
+function LoadingScreen() {
+  return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7fa" }}>
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontSize: 32, fontWeight: 800, marginBottom: 8 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</div>
+      <div style={{ width: 40, height: 40, margin: "0 auto 12px", border: "3px solid #e8e8ec", borderTopColor: "#e85d04", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+      <div style={{ fontSize: 13, color: "#8b8b9e" }}>Cargando datos...</div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  </div>;
+}
+
+function ErrorScreen({ error, onRetry }) {
+  return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7fa" }}>
+    <div style={{ textAlign: "center", maxWidth: 400, padding: 20 }}>
+      <div style={{ fontSize: 32, fontWeight: 800, marginBottom: 8 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</div>
+      <div style={{ fontSize: 40, marginBottom: 8 }}>⚠️</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: "#dc2626", marginBottom: 6 }}>Error de conexión</div>
+      <div style={{ fontSize: 12, color: "#8b8b9e", marginBottom: 16, lineHeight: 1.5 }}>{error}</div>
+      <Btn onClick={onRetry}>🔄 Reintentar</Btn>
+    </div>
+  </div>;
+}
+
+// ============================================================
 // MAIN APP
 // ============================================================
 export default function Home() {
   const mobile = useIsMobile();
   const [view, setView] = useState("dashboard");
   const [selectedId, setSelectedId] = useState(null);
-  const [invoices, setInvoices] = useState(initInvoices);
-  const [suppliers, setSuppliers] = useState(initSuppliers);
-  const [recurring, setRecurring] = useState(initRecurring);
+  const [invoices, setInvoices] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [recurring, setRecurring] = useState([]);
   const [filters, setFilters] = useState({ status: "ALL", search: "" });
   const [notification, setNotification] = useState(null);
   const [paySelection, setPaySelection] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
+  // ─── Fetch from Supabase ─────────────────────────────────
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // 1) Suppliers
+      const { data: supData, error: supErr } = await supabase
+        .from("suppliers")
+        .select("*")
+        .order("name");
+      if (supErr) throw supErr;
+
+      // 2) Invoices with events
+      const { data: invData, error: invErr } = await supabase
+        .from("invoices")
+        .select(`
+          *,
+          invoice_events ( id, event_type, performed_by, created_at, notes )
+        `)
+        .order("due_date", { ascending: true });
+      if (invErr) throw invErr;
+
+      // 3) Recurring expenses
+      const { data: recData, error: recErr } = await supabase
+        .from("recurring_expenses")
+        .select("*")
+        .order("day_of_month", { ascending: true });
+      if (recErr) throw recErr;
+
+      // ─── Map DB rows → UI shape ──────────────────────────
+      const mappedSuppliers = (supData || []).map(s => ({
+        id: s.id,
+        name: s.name,
+        alias: s.alias || s.name,
+        tax_id: s.tax_id || s.rut || "",
+        category: s.category || "Servicios",
+        bank: s.bank_name || s.bank || "—",
+        account_type: s.account_type || "—",
+        account_number: s.account_number || "—",
+        currency: s.currency || "UYU",
+        phone: s.phone || "—",
+        email: s.email || "—",
+        contact: s.contact_name || s.contact || "—",
+        payment_terms: s.payment_terms || "30 días",
+        notes: s.notes || "",
+      }));
+
+      const mappedInvoices = (invData || []).map(inv => ({
+        id: inv.id,
+        supplier_id: inv.supplier_id,
+        invoice_number: inv.invoice_number || inv.number || "—",
+        series: inv.invoice_series || inv.series || "A",
+        issue_date: inv.issue_date,
+        due_date: inv.due_date,
+        currency: inv.currency || "UYU",
+        subtotal: inv.subtotal ?? (inv.total ? inv.total - Math.round(inv.total * 0.22 / 1.22) : 0),
+        tax_amount: inv.tax_amount ?? (inv.total ? Math.round(inv.total * 0.22 / 1.22) : 0),
+        total: inv.total || 0,
+        status: (inv.status || "NEW").toUpperCase(),
+        source: inv.source || "email",
+        confidence: inv.confidence_scores || inv.confidence || inv.extraction_confidence || {
+          supplier_name: 0.95, tax_id: 0.92, invoice_number: 0.98,
+          issue_date: 0.97, total: 0.99, due_date: 0.88, currency: 1.0, tax_amount: 0.90,
+        },
+        created_at: inv.created_at,
+        payment_date: inv.payment_date || null,
+        events: (inv.invoice_events || []).map(e => ({
+          type: e.event_type || "change",
+          by: e.notes?.match(/por (.+)$/)?.[1] || "Sistema",
+          at: e.created_at ? e.created_at.split("T")[0] : "",
+          note: e.notes || e.event_type || "",
+        })),
+      }));
+
+      const mappedRecurring = (recData || []).map(r => ({
+        id: r.id,
+        type: r.type || r.expense_type || "fixed_cost",
+        name: r.name || r.description || "",
+        amount: r.estimated_amount || r.amount || 0,
+        currency: r.currency || "UYU",
+        frequency: r.frequency || "monthly",
+        day: r.day_of_month || r.day || 1,
+        category: r.category || "Servicios",
+        active: r.active !== false,
+        supplier_id: r.supplier_id || null,
+        variable: r.variable || r.is_variable || false,
+        total_installments: r.total_installments || undefined,
+        current_installment: r.current_installment || undefined,
+        card_last4: r.credit_card_last4 || r.card_last4 || "",
+      }));
+
+      setSuppliers(mappedSuppliers);
+      setInvoices(mappedInvoices);
+      setRecurring(mappedRecurring);
+    } catch (err) {
+      console.error("Cajú: Error fetching data", err);
+      setError(err.message || "No se pudo conectar a la base de datos");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  // ─── Notification & Nav (unchanged) ──────────────────────
   const notify = useCallback((msg, type = "success") => { setNotification({ msg, type }); setTimeout(() => setNotification(null), 2500); }, []);
   const nav = useCallback((v, id = null) => { setView(v); setSelectedId(id); }, []);
 
-  const updateInvoice = useCallback((id, updates) => {
-    setInvoices(prev => prev.map(inv => inv.id === id ? { ...inv, ...updates, events: [...inv.events, { type: "change", by: "Juan", at: new Date().toISOString().split("T")[0], note: `→ ${STATUSES[updates.status]?.label}` }] } : inv));
+  // ─── Update invoice: write to Supabase then update local state ───
+  const updateInvoice = useCallback(async (id, updates) => {
+    // Optimistic update
+    setInvoices(prev => prev.map(inv => inv.id === id ? {
+      ...inv, ...updates,
+      events: [...inv.events, { type: "change", by: "Juan", at: new Date().toISOString().split("T")[0], note: `→ ${STATUSES[updates.status]?.label}` }]
+    } : inv));
     notify(`Factura → ${STATUSES[updates.status]?.label}`);
+
+    // Persist to Supabase
+    try {
+      const { error: updErr } = await supabase
+        .from("invoices")
+        .update({ status: updates.status, updated_at: new Date().toISOString() })
+        .eq("id", id);
+      if (updErr) throw updErr;
+
+      // Log event
+      await supabase.from("invoice_events").insert({
+        invoice_id: id,
+        event_type: "status_change",
+        notes: `→ ${STATUSES[updates.status]?.label} por Juan`,
+      });
+    } catch (err) {
+      console.error("Cajú: Error updating invoice", err);
+      notify("Error al guardar cambio", "error");
+    }
   }, [notify]);
 
   const stats = useMemo(() => {
@@ -199,6 +299,10 @@ export default function Home() {
 
   const selInv = selectedId && view === "inbox" ? invoices.find(i => i.id === selectedId) : null;
   const selSup = selectedId && view === "suppliers" ? suppliers.find(s => s.id === selectedId) : null;
+
+  // ─── Loading / Error screens ─────────────────────────────
+  if (loading) return <LoadingScreen />;
+  if (error) return <ErrorScreen error={error} onRetry={fetchData} />;
 
   const navItems = [
     { key: "dashboard", label: "Dashboard", icon: "📊" },
@@ -263,6 +367,7 @@ export default function Home() {
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
         ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #d1d1d8; border-radius: 2px; }
         input, select, textarea { font-family: inherit; font-size: 16px; }
         button { font-family: inherit; }
@@ -393,6 +498,7 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile }
         </div>
       </Card>;
     })}
+    {filtered.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>📭</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>Sin facturas</div></Card>}
   </div>;
 }
 
@@ -466,6 +572,7 @@ function InvDetail({ inv, sup, onBack, onUpdate, mobile }) {
           <span style={{ color: "#b0b0c0", fontSize: 11 }}>{fmtDate(e.at)}</span>
         </div>
       ))}
+      {inv.events.length === 0 && <div style={{ fontSize: 12, color: "#8b8b9e", textAlign: "center", padding: 8 }}>Sin eventos</div>}
     </Card>
   </div>;
 }
@@ -536,9 +643,46 @@ function RecurringView({ recurring, setRecurring, suppliers, mobile }) {
   const grouped = useMemo(() => { const g = { fixed_cost: [], owner_withdrawal: [], installment: [] }; recurring.forEach(r => g[r.type]?.push(r)); return g; }, [recurring]);
   const total = recurring.filter(r => r.active).reduce((s, r) => s + r.amount, 0);
   const startEdit = item => { setForm({ type: item.type, name: item.name, amount: String(item.amount), day: String(item.day), supplier_id: item.supplier_id || "", category: item.category, total_installments: item.total_installments ? String(item.total_installments) : "", current_installment: item.current_installment ? String(item.current_installment) : "", card_last4: item.card_last4 || "" }); setEditId(item.id); setShowForm(true); };
-  const save = () => {
+  const save = async () => {
     const item = { ...form, amount: Number(form.amount), day: Number(form.day), active: true, variable: false, total_installments: form.total_installments ? Number(form.total_installments) : undefined, current_installment: form.current_installment ? Number(form.current_installment) : undefined };
-    setRecurring(prev => editId ? prev.map(r => r.id === editId ? { ...r, ...item } : r) : [...prev, { ...item, id: `r${Date.now()}` }]);
+
+    // Persist to Supabase
+    try {
+      const dbRow = {
+        name: item.name,
+        type: item.type,
+        estimated_amount: item.amount,
+        day_of_month: item.day,
+        category: item.category,
+        supplier_id: item.supplier_id || null,
+        active: true,
+        is_variable: item.variable,
+        currency: "UYU",
+        frequency: "monthly",
+        total_installments: item.total_installments || null,
+        current_installment: item.current_installment || null,
+        credit_card_last4: item.card_last4 || null,
+      };
+
+      if (editId) {
+        const { error } = await supabase.from("recurring_expenses").update(dbRow).eq("id", editId);
+        if (error) throw error;
+        setRecurring(prev => prev.map(r => r.id === editId ? { ...r, ...item } : r));
+      } else {
+        const { data, error } = await supabase.from("recurring_expenses").insert(dbRow).select().single();
+        if (error) throw error;
+        setRecurring(prev => [...prev, { ...item, id: data.id }]);
+      }
+    } catch (err) {
+      console.error("Cajú: Error saving recurring", err);
+      // Fallback: update local state anyway
+      if (editId) {
+        setRecurring(prev => prev.map(r => r.id === editId ? { ...r, ...item } : r));
+      } else {
+        setRecurring(prev => [...prev, { ...item, id: `r${Date.now()}` }]);
+      }
+    }
+
     setShowForm(false); setEditId(null);
   };
 
@@ -605,6 +749,37 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
   const [form, setForm] = useState({ name: "", alias: "", tax_id: "", category: "Insumos", bank: "Itaú", account_type: "CC", account_number: "", currency: "UYU", phone: "", email: "", contact: "", payment_terms: "30 días", notes: "" });
   const filtered = suppliers.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.alias?.toLowerCase().includes(search.toLowerCase()) || s.tax_id?.includes(search));
 
+  const saveSupplier = async () => {
+    try {
+      const dbRow = {
+        name: form.name,
+        alias: form.alias,
+        tax_id: form.tax_id,
+        rut: form.tax_id,
+        category: form.category,
+        bank_name: form.bank,
+        bank: form.bank,
+        account_type: form.account_type,
+        account_number: form.account_number,
+        currency: form.currency,
+        phone: form.phone,
+        email: form.email,
+        contact_name: form.contact,
+        contact: form.contact,
+        payment_terms: form.payment_terms,
+        notes: form.notes,
+      };
+      const { data, error } = await supabase.from("suppliers").insert(dbRow).select().single();
+      if (error) throw error;
+      setSuppliers(p => [...p, { ...form, id: data.id }]);
+    } catch (err) {
+      console.error("Cajú: Error saving supplier", err);
+      // Fallback local
+      setSuppliers(p => [...p, { ...form, id: `s${Date.now()}` }]);
+    }
+    setShowForm(false);
+  };
+
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Proveedores</h1>
@@ -627,7 +802,7 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
         <Select label="Cond. Pago" value={form.payment_terms} onChange={e => setForm(f => ({ ...f, payment_terms: e.target.value }))}><option>Contado</option><option>15 días</option><option>30 días</option><option>60 días</option><option>Mensual</option></Select>
         <Input label="Notas" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
       </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={() => { setSuppliers(p => [...p, { ...form, id: `s${Date.now()}` }]); setShowForm(false); }}>Guardar</Btn></div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={saveSupplier}>Guardar</Btn></div>
     </Card>}
 
     <input type="text" placeholder="🔍  Buscar proveedor, RUT..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none", marginBottom: 10 }} />
@@ -659,7 +834,29 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
 function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, mobile }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ ...sup });
-  const save = () => { setSuppliers(p => p.map(s => s.id === sup.id ? { ...s, ...form } : s)); setEditing(false); };
+
+  const save = async () => {
+    // Persist to Supabase
+    try {
+      const dbRow = {
+        name: form.name,
+        alias: form.alias,
+        tax_id: form.tax_id,
+        rut: form.tax_id,
+        phone: form.phone,
+        email: form.email,
+        contact_name: form.contact,
+        contact: form.contact,
+      };
+      const { error } = await supabase.from("suppliers").update(dbRow).eq("id", sup.id);
+      if (error) throw error;
+    } catch (err) {
+      console.error("Cajú: Error updating supplier", err);
+    }
+    setSuppliers(p => p.map(s => s.id === sup.id ? { ...s, ...form } : s));
+    setEditing(false);
+  };
+
   const pending = invs.filter(i => !["PAID", "REJECTED"].includes(i.status)).reduce((s, i) => s + i.total, 0);
   const paid = invs.filter(i => i.status === "PAID").reduce((s, i) => s + i.total, 0);
 
