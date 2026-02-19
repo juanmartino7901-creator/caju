@@ -413,7 +413,7 @@ export default function Home() {
         {notification && <div style={{ position: "fixed", top: mobile ? 8 : 14, right: mobile ? 8 : 14, left: mobile ? 8 : "auto", zIndex: 999, padding: "10px 16px", borderRadius: 10, background: notification.type === "success" ? "#059669" : "#ef4444", color: "#fff", fontSize: 13, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", textAlign: "center" }}>{notification.msg}</div>}
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
-        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} />}
+        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} />}
         {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} onBack={() => nav("inbox")} onUpdate={updateInvoice} mobile={mobile} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} mobile={mobile} />}
@@ -427,6 +427,7 @@ export default function Home() {
         * { box-sizing: border-box; margin: 0; padding: 0; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse { 0%, 100% { width: 30%; } 50% { width: 80%; } }
         ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #d1d1d8; border-radius: 2px; }
         input, select, textarea { font-family: inherit; font-size: 16px; }
         button { font-family: inherit; }
@@ -500,8 +501,11 @@ function Dashboard({ stats, invoices, recurring, suppliers, nav, mobile }) {
 // ============================================================
 // INBOX
 // ============================================================
-function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile }) {
+function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, onInvoiceUploaded }) {
   const [showUpload, setShowUpload] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const [dragOver, setDragOver] = useState(false);
   const filtered = useMemo(() => {
     let list = invoices;
     if (filters.status !== "ALL") list = list.filter(i => i.status === filters.status);
@@ -509,21 +513,74 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile }
     return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [invoices, filters, suppliers]);
 
+  const handleUpload = async (file) => {
+    if (!file) return;
+    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    if (!allowed.includes(file.type)) { notify("Formato no soportado. Usá PDF, JPG o PNG.", "error"); return; }
+    if (file.size > 10 * 1024 * 1024) { notify("Archivo demasiado grande (máx 10MB)", "error"); return; }
+
+    setUploading(true);
+    setUploadProgress("Subiendo archivo...");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      setUploadProgress("Extrayendo datos con AI...");
+      const res = await fetch("/api/invoices", { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 409) { notify("Esta factura ya fue subida", "error"); }
+        else { notify(data.error || "Error subiendo factura", "error"); }
+        return;
+      }
+
+      setShowUpload(false);
+      notify(data.supplier_matched
+        ? `✅ Factura extraída — ${data.extracted.emisor_nombre}`
+        : `✅ Factura extraída — Proveedor no encontrado, revisá los datos`
+      );
+
+      if (onInvoiceUploaded) onInvoiceUploaded();
+    } catch (err) {
+      console.error("Upload error:", err);
+      notify("Error de conexión al subir factura", "error");
+    } finally {
+      setUploading(false);
+      setUploadProgress("");
+    }
+  };
+
+  const onFileSelect = (e) => { if (e.target.files?.[0]) handleUpload(e.target.files[0]); e.target.value = ""; };
+  const onDrop = (e) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleUpload(e.dataTransfer.files[0]); };
+
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Inbox</h1>
-      <Btn size={mobile ? "sm" : "md"} onClick={() => setShowUpload(!showUpload)}>📤 Subir</Btn>
+      <Btn size={mobile ? "sm" : "md"} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>📤 Subir</Btn>
     </div>
 
-    {showUpload && <Card style={{ marginBottom: 12, border: "2px dashed #e85d04", background: "#fff8f3", textAlign: "center", padding: 24 }}>
-      <div style={{ fontSize: 32, marginBottom: 4, opacity: 0.3 }}>📄</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#e85d04" }}>Arrastrá archivos o tocá para seleccionar</div>
-      <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 3 }}>PDF, JPG, PNG — Máx 10 MB</div>
-      <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 12 }}>
-        {[["📸", "Papel"], ["📧", "Email"], ["💬", "WhatsApp"]].map(([ic, lb]) => (
-          <Btn key={lb} variant="secondary" size="sm" onClick={() => { setShowUpload(false); notify(`Subida desde ${lb} (demo)`); }}>{ic} {lb}</Btn>
-        ))}
-      </div>
+    {showUpload && <Card
+      style={{ marginBottom: 12, border: `2px dashed ${dragOver ? "#e85d04" : "#e0c4a8"}`, background: dragOver ? "#fff0e0" : "#fff8f3", textAlign: "center", padding: 24, transition: "all 0.15s" }}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
+    >
+      {uploading ? <>
+        <div style={{ fontSize: 28, marginBottom: 8 }}>⚙️</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#e85d04" }}>{uploadProgress}</div>
+        <div style={{ width: 120, height: 4, background: "#f1e8df", borderRadius: 2, margin: "12px auto 0", overflow: "hidden" }}>
+          <div style={{ width: "60%", height: "100%", background: "#e85d04", borderRadius: 2, animation: "pulse 1.5s ease infinite" }} />
+        </div>
+      </> : <>
+        <div style={{ fontSize: 32, marginBottom: 4, opacity: 0.3 }}>📄</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#e85d04" }}>Arrastrá archivos o tocá para seleccionar</div>
+        <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 3 }}>PDF, JPG, PNG — Máx 10 MB</div>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 12, padding: "8px 16px", borderRadius: 8, background: "#e85d04", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          📁 Elegir archivo
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={onFileSelect} style={{ display: "none" }} />
+        </label>
+      </>}
     </Card>}
 
     <input type="text" placeholder="🔍  Buscar proveedor, número..." value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none", marginBottom: 8 }} />

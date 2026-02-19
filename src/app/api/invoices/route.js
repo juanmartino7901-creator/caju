@@ -1,279 +1,232 @@
-// ============================================================
-// src/app/api/invoices/route.js
-// Invoice upload + listing API
-// ============================================================
+import { createClient } from "@supabase/supabase-js";
+import Anthropic from "@anthropic-ai/sdk";
+import { NextResponse } from "next/server";
+import crypto from "crypto";
 
-import { createClient } from '@supabase/supabase-js';
-import { NextResponse } from 'next/server';
-import crypto from 'crypto';
-
+// Server-side Supabase client (with service role for storage)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ============================================================
-// GET /api/invoices — List invoices with filters
-// ============================================================
-export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const status = searchParams.get('status');
-  const supplier_id = searchParams.get('supplier_id');
-  const due_from = searchParams.get('due_from');
-  const due_to = searchParams.get('due_to');
-  const search = searchParams.get('search');
-  const page = parseInt(searchParams.get('page') || '1');
-  const limit = parseInt(searchParams.get('limit') || '50');
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  let query = supabase
-    .from('invoices')
-    .select(`
-      *,
-      supplier:suppliers(id, name, alias, tax_id, bank_name, bank_code, account_type, account_number),
-      events:invoice_events(id, event_type, from_status, to_status, notes, created_at)
-    `, { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
+// ─── Claude Vision extraction prompt ────────────────────────
+const EXTRACTION_PROMPT = `Sos un extractor de datos de facturas uruguayas (e-factura, CFE). Analizá esta imagen/documento y extraé los siguientes campos en formato JSON estricto.
 
-  if (status && status !== 'ALL') {
-    query = query.eq('status', status);
-  }
-  if (supplier_id) {
-    query = query.eq('supplier_id', supplier_id);
-  }
-  if (due_from) {
-    query = query.gte('due_date', due_from);
-  }
-  if (due_to) {
-    query = query.lte('due_date', due_to);
-  }
-  if (search) {
-    query = query.or(`invoice_number.ilike.%${search}%,supplier_name_raw.ilike.%${search}%`);
-  }
+Respondé SOLO con un JSON válido, sin texto antes ni después. Campos:
 
-  const { data, error, count } = await query;
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+{
+  "emisor_nombre": "Razón social del emisor",
+  "emisor_rut": "RUT del emisor (12 dígitos)",
+  "comprador_nombre": "Razón social del comprador",
+  "comprador_rut": "RUT del comprador (12 dígitos)",
+  "invoice_number": "Número de factura completo (ej: A 00017847)",
+  "invoice_series": "Serie (ej: A, B, E)",
+  "issue_date": "Fecha de emisión en formato YYYY-MM-DD",
+  "due_date": "Fecha de vencimiento en formato YYYY-MM-DD o null si dice CONTADO o no tiene",
+  "currency": "UYU o USD",
+  "subtotal": número sin IVA (monto exento + monto gravado),
+  "tax_amount": número total de IVA,
+  "total": número total a pagar,
+  "cae": "Número de CAE",
+  "payment_terms": "CONTADO, 15 días, 30 días, etc.",
+  "line_items": [
+    {"description": "texto", "quantity": número, "unit_price": número, "amount": número}
+  ],
+  "confidence": {
+    "emisor_nombre": 0.0-1.0,
+    "emisor_rut": 0.0-1.0,
+    "invoice_number": 0.0-1.0,
+    "issue_date": 0.0-1.0,
+    "due_date": 0.0-1.0,
+    "total": 0.0-1.0,
+    "tax_amount": 0.0-1.0,
+    "currency": 0.0-1.0
   }
-
-  return NextResponse.json({
-    invoices: data,
-    total: count,
-    page,
-    limit,
-  });
 }
 
-// ============================================================
-// POST /api/invoices — Upload new invoice
-// ============================================================
+Notas:
+- Los montos son numéricos (no strings). Ej: 3235.01, no "3.235,01"
+- Si un campo no es legible, poné null y confidence 0.0
+- Si dice CONTADO y no hay fecha de vencimiento, due_date = issue_date
+- El RUT uruguayo tiene 12 dígitos
+- Separá monto exento y gravado si es posible para calcular subtotal`;
+
 export async function POST(request) {
   try {
     const formData = await request.formData();
-    const file = formData.get('file');
-    const source = formData.get('source') || 'paper';
-    const supplierHint = formData.get('supplier_hint') || null;
-    const userId = formData.get('user_id'); // From auth middleware
+    const file = formData.get("file");
 
     if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+      return NextResponse.json({ error: "No se recibió archivo" }, { status: 400 });
     }
 
-    // Read file
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const fileName = file.name;
-    const mimeType = file.type;
-    const fileSize = buffer.length;
+    // Validate file type
+    const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      return NextResponse.json({ error: "Formato no soportado. Usá PDF, JPG o PNG." }, { status: 400 });
+    }
 
-    // Generate SHA-256 hash
-    const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
+    // Validate size (10MB max)
+    if (file.size > 10 * 1024 * 1024) {
+      return NextResponse.json({ error: "Archivo demasiado grande (máx 10MB)" }, { status: 400 });
+    }
 
-    // Check for duplicate by hash
+    // Read file as buffer
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
+
+    // Check for duplicate
     const { data: existing } = await supabase
-      .from('invoices')
-      .select('id, status, invoice_number')
-      .eq('file_hash', fileHash)
-      .limit(1)
-      .single();
+      .from("invoices")
+      .select("id")
+      .eq("file_hash", fileHash)
+      .maybeSingle();
 
     if (existing) {
-      return NextResponse.json({
-        error: 'Archivo duplicado',
-        message: `Este archivo ya fue cargado (Factura: ${existing.invoice_number || existing.id})`,
-        duplicate_id: existing.id,
-        status: existing.status,
-      }, { status: 409 });
+      return NextResponse.json({ error: "Esta factura ya fue subida", duplicate_id: existing.id }, { status: 409 });
     }
 
-    // Upload file to Supabase Storage
-    const datePrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
-    const safeFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filePath = `INBOX/${datePrefix}/${fileHash.slice(0, 8)}_${safeFileName}`;
+    // Upload to Supabase Storage
+    const ext = file.type === "application/pdf" ? "pdf" : file.type === "image/png" ? "png" : "jpg";
+    const filePath = `invoices/${Date.now()}_${fileHash}.${ext}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from('invoices')
-      .upload(filePath, buffer, {
-        contentType: mimeType,
-        upsert: false,
+    const { error: uploadErr } = await supabase.storage
+      .from("invoices")
+      .upload(filePath, buffer, { contentType: file.type, upsert: false });
+
+    if (uploadErr) {
+      console.error("Storage upload error:", uploadErr);
+      // If bucket doesn't exist, continue without storage
+      if (!uploadErr.message?.includes("not found")) {
+        return NextResponse.json({ error: "Error subiendo archivo" }, { status: 500 });
+      }
+    }
+
+    // ─── Call Claude Vision ──────────────────────────────────
+    const base64 = buffer.toString("base64");
+
+    let mediaType;
+    if (file.type === "application/pdf") {
+      mediaType = "application/pdf";
+    } else if (file.type === "image/png") {
+      mediaType = "image/png";
+    } else if (file.type === "image/webp") {
+      mediaType = "image/webp";
+    } else {
+      mediaType = "image/jpeg";
+    }
+
+    // Build the content for Claude
+    const content = [];
+
+    if (file.type === "application/pdf") {
+      content.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: base64 },
       });
-
-    if (uploadError) {
-      return NextResponse.json({ error: 'Upload failed: ' + uploadError.message }, { status: 500 });
+    } else {
+      content.push({
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: base64 },
+      });
     }
 
-    // Create invoice record
-    const { data: invoice, error: insertError } = await supabase
-      .from('invoices')
-      .insert({
-        file_path: filePath,
-        file_hash: fileHash,
-        file_name: fileName,
-        file_mime_type: mimeType,
-        file_size_bytes: fileSize,
-        source: source,
-        source_detail: supplierHint,
-        status: 'NEW',
-        created_by: userId,
-      })
+    content.push({ type: "text", text: EXTRACTION_PROMPT });
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2000,
+      messages: [{ role: "user", content }],
+    });
+
+    // Parse Claude's response
+    const responseText = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+
+    let extracted;
+    try {
+      // Try to extract JSON from the response (handle possible markdown fences)
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON found in response");
+      extracted = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      console.error("Parse error:", parseErr, "Response:", responseText);
+      return NextResponse.json({ error: "Error procesando la factura con AI", raw: responseText }, { status: 500 });
+    }
+
+    // ─── Match supplier by RUT ──────────────────────────────
+    let supplierId = null;
+    let supplierMatched = false;
+
+    if (extracted.emisor_rut) {
+      const { data: matchedSup } = await supabase
+        .from("suppliers")
+        .select("id")
+        .eq("tax_id", extracted.emisor_rut)
+        .maybeSingle();
+
+      if (matchedSup) {
+        supplierId = matchedSup.id;
+        supplierMatched = true;
+      }
+    }
+
+    // Determine initial status
+    const hasLowConfidence = extracted.confidence && Object.values(extracted.confidence).some((v) => v !== null && v < 0.8);
+    const initialStatus = hasLowConfidence ? "REVIEW_REQUIRED" : "EXTRACTED";
+
+    // ─── Insert invoice into DB ─────────────────────────────
+    const invoiceRow = {
+      file_path: filePath,
+      file_hash: fileHash,
+      status: initialStatus,
+      supplier_id: supplierId,
+      invoice_number: extracted.invoice_number || "—",
+      invoice_series: extracted.invoice_series || "A",
+      issue_date: extracted.issue_date || null,
+      due_date: extracted.due_date || extracted.issue_date || null,
+      currency: extracted.currency || "UYU",
+      subtotal: extracted.subtotal || 0,
+      tax_amount: extracted.tax_amount || 0,
+      total: extracted.total || 0,
+      confidence_scores: extracted.confidence || {},
+      source: "upload",
+    };
+
+    const { data: newInvoice, error: insertErr } = await supabase
+      .from("invoices")
+      .insert(invoiceRow)
       .select()
       .single();
 
-    if (insertError) {
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+    if (insertErr) {
+      console.error("Insert error:", insertErr);
+      return NextResponse.json({ error: "Error guardando factura" }, { status: 500 });
     }
 
-    // Log creation event
-    await supabase.from('invoice_events').insert({
-      invoice_id: invoice.id,
-      event_type: 'created',
-      to_status: 'NEW',
-      performed_by: userId,
-      notes: `Factura subida desde ${source}`,
+    // Log event
+    await supabase.from("invoice_events").insert({
+      invoice_id: newInvoice.id,
+      event_type: "created",
+      from_status: null,
+      to_status: initialStatus,
+      notes: `Factura subida y extraída por AI — ${supplierMatched ? "Proveedor matcheado" : "Proveedor no encontrado"}`,
     });
-
-    // Trigger extraction asynchronously
-    // In production this would be a background job queue
-    // For MVP, we call it inline but don't await the result
-    triggerExtraction(invoice.id, filePath, mimeType, supplierHint)
-      .catch(err => console.error('Extraction failed:', err));
 
     return NextResponse.json({
       success: true,
-      invoice: invoice,
-      message: 'Factura cargada exitosamente. La extracción AI está en proceso.',
-    }, { status: 201 });
-
-  } catch (error) {
-    console.error('Upload error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-}
-
-// ============================================================
-// Trigger AI extraction (runs asynchronously)
-// ============================================================
-async function triggerExtraction(invoiceId, filePath, mimeType, supplierHint) {
-  // Update status to EXTRACTING
-  await supabase
-    .from('invoices')
-    .update({ status: 'EXTRACTING' })
-    .eq('id', invoiceId);
-
-  try {
-    // Download file from storage
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from('invoices')
-      .download(filePath);
-
-    if (downloadError) throw downloadError;
-
-    const buffer = Buffer.from(await fileData.arrayBuffer());
-
-    // Call extraction
-    const { extractInvoiceData, matchSupplier } = await import('@/lib/extract');
-    const result = await extractInvoiceData(buffer, mimeType, supplierHint);
-
-    if (!result.success) {
-      await supabase.from('invoices').update({
-        status: 'REVIEW_REQUIRED',
-        extraction_errors: result.errors,
-        extraction_model: result.model,
-        extracted_at: new Date().toISOString(),
-      }).eq('id', invoiceId);
-      return;
-    }
-
-    const extracted = result.data;
-
-    // Try to match supplier
-    let supplierId = null;
-    const matchedSupplier = await matchSupplier(
-      supabase,
-      extracted.supplier_name,
-      extracted.supplier_tax_id
-    );
-    if (matchedSupplier) {
-      supplierId = matchedSupplier.id;
-    }
-
-    // Update invoice with extracted data
-    await supabase.from('invoices').update({
-      status: result.status,
+      invoice: newInvoice,
+      extracted,
+      supplier_matched: supplierMatched,
       supplier_id: supplierId,
-      supplier_name_raw: extracted.supplier_name,
-      supplier_tax_id_raw: extracted.supplier_tax_id,
-      invoice_number: extracted.invoice_number,
-      invoice_series: extracted.invoice_series,
-      issue_date: extracted.issue_date,
-      due_date: extracted.due_dates?.[0] || null,
-      currency: extracted.currency || 'UYU',
-      subtotal: extracted.subtotal,
-      tax_amount: extracted.tax_amount,
-      total: extracted.total,
-      payment_terms: extracted.payment_terms,
-      notes_extracted: extracted.notes,
-      raw_extracted_text: result.raw_text,
-      extraction_json: extracted,
-      confidence_scores: result.confidence_scores,
-      extraction_errors: result.errors.length > 0 ? result.errors : null,
-      extraction_model: result.model,
-      extracted_at: new Date().toISOString(),
-    }).eq('id', invoiceId);
-
-    // Insert line items if present
-    if (extracted.items && extracted.items.length > 0) {
-      const items = extracted.items.map((item, idx) => ({
-        invoice_id: invoiceId,
-        description: item.description,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price: item.unit_price,
-        line_total: item.line_total,
-        sort_order: idx,
-      }));
-      await supabase.from('invoice_items').insert(items);
-    }
-
-    // Log extraction event
-    await supabase.from('invoice_events').insert({
-      invoice_id: invoiceId,
-      event_type: 'extracted',
-      to_status: result.status,
-      notes: `Extracción AI completada (${result.model}). Confianza promedio: ${
-        Object.values(result.confidence_scores).length > 0
-          ? Math.round(Object.values(result.confidence_scores).reduce((a, b) => a + b, 0) / Object.values(result.confidence_scores).length * 100)
-          : '?'
-      }%`,
-      metadata: { confidence: result.confidence_scores },
     });
-
-  } catch (error) {
-    console.error('Extraction pipeline error:', error);
-    await supabase.from('invoices').update({
-      status: 'REVIEW_REQUIRED',
-      extraction_errors: [error.message],
-      extracted_at: new Date().toISOString(),
-    }).eq('id', invoiceId);
+  } catch (err) {
+    console.error("Invoice upload error:", err);
+    return NextResponse.json({ error: err.message || "Error interno" }, { status: 500 });
   }
 }
