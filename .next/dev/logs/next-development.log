@@ -1,0 +1,56 @@
+[01:36:56.131] Server  ERROR   ⨯ Error: Cannot find module 'next/dist/client/components/builtin/global-not-found'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:56.146] Server  ERROR   Error: Cannot find module 'next/dist/pages/_error'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:56.163] Server  ERROR   ⨯ Error: Cannot find module 'next/dist/pages/_error'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:56.171] Server  ERROR   Error: Cannot find module 'next/dist/pages/_error'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:58.003] Server  ERROR   ⨯ Error: Cannot find module 'next/dist/client/components/builtin/global-not-found'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:58.022] Server  ERROR   Error: Cannot find module 'next/dist/pages/_error'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:58.033] Server  ERROR   ⨯ Error: Cannot find module 'next/dist/pages/_error'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
+[01:36:58.044] Server  ERROR   Error: Cannot find module 'next/dist/pages/_error'
+Require stack:
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/on-demand-entry-handler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/dev/hot-reloader-turbopack.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-utils/setup-dev-bundler.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/router-server.js
+- /Users/juanmartino/Desktop/caju/node_modules/next/dist/server/lib/start-server.js
