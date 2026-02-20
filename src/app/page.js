@@ -408,6 +408,61 @@ export default function Home() {
     }
   }, [notify]);
 
+  // ─── Batch actions ──────────────────────────────────────
+  const batchUpdateInvoices = useCallback(async (ids, updates) => {
+    const label = STATUSES[updates.status]?.label || "actualizado";
+    if (!confirm(`¿${label} ${ids.length} factura(s)?`)) return false;
+    try {
+      for (const id of ids) {
+        await supabase.from("invoices").update({ status: updates.status, updated_at: new Date().toISOString() }).eq("id", id);
+        await supabase.from("invoice_events").insert({ invoice_id: id, event_type: "status_change", notes: `→ ${label} por ${userName} (lote)` });
+      }
+      setInvoices(prev => prev.map(inv => ids.includes(inv.id) ? {
+        ...inv, ...updates,
+        events: [...inv.events, { type: "change", by: userName, at: new Date().toISOString().split("T")[0], note: `→ ${label} (lote)` }]
+      } : inv));
+      notify(`${ids.length} factura(s) → ${label}`);
+      return true;
+    } catch (err) {
+      console.error("Batch update error:", err);
+      notify("Error al actualizar facturas", "error");
+      return false;
+    }
+  }, [notify, userName]);
+
+  const batchDeleteInvoices = useCallback(async (ids) => {
+    if (!confirm(`¿Eliminar ${ids.length} factura(s)? Esta acción no se puede deshacer.`)) return false;
+    try {
+      for (const id of ids) {
+        await supabase.from("invoice_events").delete().eq("invoice_id", id);
+        await supabase.from("invoices").delete().eq("id", id);
+      }
+      setInvoices(prev => prev.filter(i => !ids.includes(i.id)));
+      notify(`${ids.length} factura(s) eliminada(s)`);
+      return true;
+    } catch (err) {
+      console.error("Batch delete invoices error:", err);
+      notify("Error al eliminar facturas", "error");
+      return false;
+    }
+  }, [notify]);
+
+  const batchDeleteSuppliers = useCallback(async (ids) => {
+    const withInvoices = ids.filter(id => invoices.some(i => i.supplier_id === id));
+    if (withInvoices.length > 0) { notify(`${withInvoices.length} proveedor(es) tienen facturas asociadas y no se pueden eliminar`, "error"); return false; }
+    if (!confirm(`¿Eliminar ${ids.length} proveedor(es)?`)) return false;
+    try {
+      for (const id of ids) { await supabase.from("suppliers").delete().eq("id", id); }
+      setSuppliers(prev => prev.filter(s => !ids.includes(s.id)));
+      notify(`${ids.length} proveedor(es) eliminado(s)`);
+      return true;
+    } catch (err) {
+      console.error("Batch delete suppliers error:", err);
+      notify("Error al eliminar proveedores", "error");
+      return false;
+    }
+  }, [invoices, notify]);
+
   // ─── Auth / Loading / Error screens ────────────────────
   if (authLoading) return <LoadingScreen />;
   if (!user) return <LoginScreen onLogin={signInWithGoogle} />;
@@ -468,11 +523,11 @@ export default function Home() {
         {notification && <div style={{ position: "fixed", top: mobile ? 8 : 14, right: mobile ? 8 : 14, left: mobile ? 8 : "auto", zIndex: 999, padding: "10px 16px", borderRadius: 10, background: notification.type === "success" ? "#059669" : "#ef4444", color: "#fff", fontSize: 13, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", textAlign: "center" }}>{notification.msg}</div>}
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
-        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} />}
+        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} />}
         {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} />}
-        {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} />}
+        {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} />}
         {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} />}
       </main>
 
@@ -556,17 +611,29 @@ function Dashboard({ stats, invoices, recurring, suppliers, nav, mobile }) {
 // ============================================================
 // INBOX
 // ============================================================
-function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, onInvoiceUploaded }) {
+function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, onInvoiceUploaded, onBatchUpdate, onBatchDelete }) {
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [sel, setSel] = useState(new Set());
   const filtered = useMemo(() => {
     let list = invoices;
     if (filters.status !== "ALL") list = list.filter(i => i.status === filters.status);
     if (filters.search) { const t = filters.search.toLowerCase(); list = list.filter(i => { const s = getSup(suppliers, i.supplier_id); return s.name?.toLowerCase().includes(t) || s.alias?.toLowerCase().includes(t) || i.invoice_number.toLowerCase().includes(t); }); }
     return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   }, [invoices, filters, suppliers]);
+
+  const toggleSel = (id, e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
+  const toggleAll = () => setSel(sel.size === filtered.length ? new Set() : new Set(filtered.map(i => i.id)));
+  const selIds = [...sel];
+
+  const handleBatchAction = async (action) => {
+    let ok;
+    if (action === "delete") { ok = await onBatchDelete(selIds); }
+    else { ok = await onBatchUpdate(selIds, { status: action }); }
+    if (ok) setSel(new Set());
+  };
 
   const handleUpload = async (file) => {
     if (!file) return;
@@ -644,29 +711,46 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
 
     <div style={{ display: "flex", gap: 5, marginBottom: 10, overflowX: "auto", paddingBottom: 4 }}>
       {["ALL", "NEW", "REVIEW_REQUIRED", "EXTRACTED", "APPROVED", "SCHEDULED", "PAID"].map(st => (
-        <button key={st} onClick={() => setFilters(f => ({ ...f, status: st }))} style={{ padding: "5px 9px", borderRadius: 6, border: "1px solid #e0e0e6", background: filters.status === st ? "#e85d04" : "#fff", color: filters.status === st ? "#fff" : "#6b7280", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+        <button key={st} onClick={() => { setFilters(f => ({ ...f, status: st })); setSel(new Set()); }} style={{ padding: "5px 9px", borderRadius: 6, border: "1px solid #e0e0e6", background: filters.status === st ? "#e85d04" : "#fff", color: filters.status === st ? "#fff" : "#6b7280", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
           {st === "ALL" ? "Todas" : STATUSES[st]?.label}
         </button>
       ))}
     </div>
 
+    {filtered.length > 0 && <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+      <Btn variant="secondary" size="sm" onClick={toggleAll}>{sel.size === filtered.length ? "Deseleccionar" : `Seleccionar todo (${filtered.length})`}</Btn>
+      {sel.size > 0 && <>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#e85d04" }}>{sel.size} seleccionada(s)</span>
+        <Btn variant="success" size="sm" onClick={() => handleBatchAction("APPROVED")}>✅ Aprobar</Btn>
+        <Btn variant="primary" size="sm" onClick={() => handleBatchAction("EXTRACTED")}>✓ Extraída</Btn>
+        <Btn variant="danger" size="sm" onClick={() => handleBatchAction("REJECTED")}>✕ Rechazar</Btn>
+        <Btn variant="danger" size="sm" onClick={() => handleBatchAction("delete")}>🗑 Eliminar</Btn>
+      </>}
+    </div>}
+
     {filtered.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
-      return <Card key={inv.id} hover onClick={() => nav("inbox", inv.id)} style={{ padding: mobile ? "12px 14px" : "10px 14px", marginBottom: 5 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+      const checked = sel.has(inv.id);
+      return <Card key={inv.id} hover onClick={() => sel.size > 0 ? toggleSel(inv.id, { stopPropagation: () => {} }) : nav("inbox", inv.id)} style={{ padding: mobile ? "12px 14px" : "10px 14px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input type="checkbox" checked={checked} onChange={(e) => toggleSel(inv.id, e)} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.alias || sup.name}</span>
-              <Badge status={inv.status} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.alias || sup.name || "Sin proveedor"}</span>
+                  <Badge status={inv.status} />
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "#8b8b9e" }}>{inv.invoice_number}</span>
+                  <span style={{ fontSize: 11, color: "#b0b0c0" }}>{fmtDate(inv.issue_date)}</span>
+                </div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(inv.total)}</div>
+                <DueBadge d={inv.due_date} />
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: "#8b8b9e" }}>{inv.invoice_number}</span>
-              <span style={{ fontSize: 11, color: "#b0b0c0" }}>{fmtDate(inv.issue_date)}</span>
-            </div>
-          </div>
-          <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 10 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(inv.total)}</div>
-            <DueBadge d={inv.due_date} />
           </div>
         </div>
       </Card>;
@@ -1036,11 +1120,20 @@ function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, m
 // ============================================================
 // SUPPLIERS
 // ============================================================
-function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
+function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDelete }) {
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
+  const [sel, setSel] = useState(new Set());
   const [form, setForm] = useState({ name: "", alias: "", tax_id: "", category: "Insumos", bank: "Itaú", account_type: "CC", account_number: "", currency: "UYU", phone: "", email: "", contact: "", payment_terms: "30 días", notes: "" });
   const filtered = suppliers.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.alias?.toLowerCase().includes(search.toLowerCase()) || s.tax_id?.includes(search));
+
+  const toggleSel = (id, e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
+  const toggleAll = () => setSel(sel.size === filtered.length ? new Set() : new Set(filtered.map(s => s.id)));
+
+  const handleBatchDelete = async () => {
+    const ok = await onBatchDelete([...sel]);
+    if (ok) setSel(new Set());
+  };
 
   const saveSupplier = async () => {
     try {
@@ -1048,17 +1141,14 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
         name: form.name,
         alias: form.alias,
         tax_id: form.tax_id,
-        rut: form.tax_id,
         category: form.category,
         bank_name: form.bank,
-        bank: form.bank,
         account_type: form.account_type,
         account_number: form.account_number,
         currency: form.currency,
         phone: form.phone,
         email: form.email,
         contact_name: form.contact,
-        contact: form.contact,
         payment_terms: form.payment_terms,
         notes: form.notes,
       };
@@ -1067,7 +1157,6 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
       setSuppliers(p => [...p, { ...form, id: data.id }]);
     } catch (err) {
       console.error("Cajú: Error saving supplier", err);
-      // Fallback local
       setSuppliers(p => [...p, { ...form, id: `s${Date.now()}` }]);
     }
     setShowForm(false);
@@ -1100,20 +1189,32 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
 
     <input type="text" placeholder="🔍  Buscar proveedor, RUT..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none", marginBottom: 10 }} />
 
+    {filtered.length > 0 && <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+      <Btn variant="secondary" size="sm" onClick={toggleAll}>{sel.size === filtered.length ? "Deseleccionar" : `Seleccionar todo (${filtered.length})`}</Btn>
+      {sel.size > 0 && <>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#e85d04" }}>{sel.size} seleccionado(s)</span>
+        <Btn variant="danger" size="sm" onClick={handleBatchDelete}>🗑 Eliminar</Btn>
+      </>}
+    </div>}
+
     <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 8 }}>
       {filtered.map(sup => {
         const pending = invoices.filter(i => i.supplier_id === sup.id && !["PAID", "REJECTED"].includes(i.status)).reduce((s, i) => s + i.total, 0);
-        return <Card key={sup.id} hover onClick={() => nav("suppliers", sup.id)}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.name}</div>
-              <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 2 }}>{sup.alias} · {sup.tax_id}</div>
-              <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "#f7f7fa", color: "#6b7280" }}>{sup.category}</span>
-                {sup.bank && sup.bank !== "—" && <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "#fff3e8", color: "#e85d04" }}>🏦 {sup.bank}</span>}
+        const checked = sel.has(sup.id);
+        return <Card key={sup.id} hover onClick={() => sel.size > 0 ? toggleSel(sup.id, { stopPropagation: () => {} }) : nav("suppliers", sup.id)} style={{ borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <input type="checkbox" checked={checked} onChange={(e) => toggleSel(sup.id, e)} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0, marginTop: 2 }} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flex: 1, minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.name}</div>
+                <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 2 }}>{sup.alias} · {sup.tax_id}</div>
+                <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "#f7f7fa", color: "#6b7280" }}>{sup.category}</span>
+                  {sup.bank && sup.bank !== "—" && <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "#fff3e8", color: "#e85d04" }}>🏦 {sup.bank}</span>}
+                </div>
               </div>
+              {pending > 0 && <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 8 }}><div style={{ fontSize: 9, color: "#8b8b9e" }}>Pendiente</div><div style={{ fontSize: 14, fontWeight: 800, color: "#e85d04" }}>{fmt(pending)}</div></div>}
             </div>
-            {pending > 0 && <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 8 }}><div style={{ fontSize: 9, color: "#8b8b9e" }}>Pendiente</div><div style={{ fontSize: 14, fontWeight: 800, color: "#e85d04" }}>{fmt(pending)}</div></div>}
           </div>
         </Card>;
       })}
