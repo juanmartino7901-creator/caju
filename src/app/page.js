@@ -731,9 +731,9 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
     {filtered.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
       const checked = sel.has(inv.id);
-      return <Card key={inv.id} hover onClick={() => sel.size > 0 ? toggleSel(inv.id, { stopPropagation: () => {} }) : nav("inbox", inv.id)} style={{ padding: mobile ? "12px 14px" : "10px 14px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
+      return <Card key={inv.id} hover onClick={() => nav("inbox", inv.id)} style={{ padding: mobile ? "12px 14px" : "10px 14px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <input type="checkbox" checked={checked} onChange={(e) => toggleSel(inv.id, e)} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0 }} />
+          <input type="checkbox" checked={checked} onChange={() => {}} onClick={(e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(inv.id) ? n.delete(inv.id) : n.add(inv.id); return n; }); }} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0, cursor: "pointer" }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ minWidth: 0, flex: 1 }}>
@@ -1201,9 +1201,9 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDele
       {filtered.map(sup => {
         const pending = invoices.filter(i => i.supplier_id === sup.id && !["PAID", "REJECTED"].includes(i.status)).reduce((s, i) => s + i.total, 0);
         const checked = sel.has(sup.id);
-        return <Card key={sup.id} hover onClick={() => sel.size > 0 ? toggleSel(sup.id, { stopPropagation: () => {} }) : nav("suppliers", sup.id)} style={{ borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
+        return <Card key={sup.id} hover onClick={() => nav("suppliers", sup.id)} style={{ borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-            <input type="checkbox" checked={checked} onChange={(e) => toggleSel(sup.id, e)} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0, marginTop: 2 }} />
+            <input type="checkbox" checked={checked} onChange={() => {}} onClick={(e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(sup.id) ? n.delete(sup.id) : n.add(sup.id); return n; }); }} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0, marginTop: 2, cursor: "pointer" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flex: 1, minWidth: 0 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.name}</div>
