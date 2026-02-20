@@ -280,6 +280,8 @@ export default function Home() {
         },
         created_at: inv.created_at,
         payment_date: inv.payment_date || null,
+        file_path: inv.file_path || null,
+        file_type: inv.file_path ? (inv.file_path.endsWith(".pdf") ? "pdf" : "image") : null,
         events: (inv.invoice_events || []).map(e => ({
           type: e.event_type || "change",
           by: e.notes?.match(/por (.+)$/)?.[1] || "Sistema",
@@ -539,7 +541,6 @@ export default function Home() {
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} />}
         {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} />}
         {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} categories={categories} />}
-        {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} />}
       </main>
 
       {mobile && <BottomNav />}
@@ -771,6 +772,89 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
 }
 
 // ============================================================
+// DOCUMENT PREVIEW (loads from Supabase Storage)
+// ============================================================
+function DocPreview({ inv }) {
+  const [url, setUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (!inv.file_path) return;
+    setLoading(true);
+    setError(false);
+
+    const storagePath = inv.file_path.replace(/^invoices\//, "");
+
+    // Try public URL first, then fall back to signed URL
+    const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/invoices/${storagePath}`;
+
+    // Test if public URL works
+    fetch(publicUrl, { method: "HEAD" })
+      .then(res => {
+        if (res.ok) {
+          setUrl(publicUrl);
+          setLoading(false);
+        } else {
+          // Fall back to signed URL
+          return supabase.storage.from("invoices").createSignedUrl(storagePath, 3600);
+        }
+      })
+      .then(result => {
+        if (result?.data?.signedUrl) {
+          setUrl(result.data.signedUrl);
+          setLoading(false);
+        } else if (result?.error) {
+          throw result.error;
+        }
+      })
+      .catch(() => {
+        setError(true);
+        setLoading(false);
+      });
+  }, [inv.file_path]);
+
+  if (!inv.file_path) {
+    return <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#fafafa", minHeight: 160 }}>
+      <div style={{ fontSize: 40, opacity: 0.2, marginBottom: 4 }}>📄</div>
+      <div style={{ fontSize: 12, color: "#8b8b9e" }}>Sin documento adjunto</div>
+    </Card>;
+  }
+
+  return <Card style={{ display: "flex", flexDirection: "column", background: "#fafafa", minHeight: 160, overflow: "hidden" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700 }}>Documento</h3>
+      {url && <a href={url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontWeight: 600, color: "#e85d04", textDecoration: "none" }}>↗ Abrir</a>}
+    </div>
+    {loading ? (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 120 }}>
+        <div style={{ width: 24, height: 24, border: "2px solid #e8e8ec", borderTopColor: "#e85d04", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+        <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 8 }}>Cargando preview...</div>
+      </div>
+    ) : error ? (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 120 }}>
+        <div style={{ fontSize: 32, opacity: 0.3, marginBottom: 4 }}>⚠️</div>
+        <div style={{ fontSize: 12, color: "#8b8b9e" }}>No se pudo cargar el documento</div>
+        <div style={{ fontSize: 11, color: "#b0b0c0", marginTop: 2 }}>Verificá que el bucket "invoices" sea público en Supabase</div>
+      </div>
+    ) : url && inv.file_type === "pdf" ? (
+      <iframe
+        src={`${url}#toolbar=0`}
+        style={{ flex: 1, width: "100%", minHeight: 300, border: "1px solid #e8e8ec", borderRadius: 8, background: "#fff" }}
+        title="Preview factura"
+      />
+    ) : url ? (
+      <img
+        src={url}
+        alt="Factura"
+        style={{ width: "100%", maxHeight: 400, objectFit: "contain", borderRadius: 8, border: "1px solid #e8e8ec", background: "#fff" }}
+        onError={() => setError(true)}
+      />
+    ) : null}
+  </Card>;
+}
+
+// ============================================================
 // INVOICE DETAIL
 // ============================================================
 function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mobile }) {
@@ -857,10 +941,7 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
           </div>}
         </div>}
       </Card>
-      <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#fafafa", minHeight: 160 }}>
-        <div style={{ fontSize: 40, opacity: 0.2, marginBottom: 4 }}>📄</div>
-        <div style={{ fontSize: 12, color: "#8b8b9e" }}>Preview documento</div>
-      </Card>
+      <DocPreview inv={inv} />
     </div>
 
     <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
@@ -992,7 +1073,7 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
 
     <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
       <Btn variant="secondary" size="sm" onClick={() => setSel(sel.size === payable.length ? new Set() : new Set(payable.map(i => i.id)))}>{sel.size === payable.length ? "Deseleccionar" : "Seleccionar todo"}</Btn>
-      {sel.size > 0 && <Btn variant="success" size="sm" onClick={() => { sel.forEach(id => onUpdate(id, { status: "PAID" })); setSel(new Set()); }}>💰 Pagar {sel.size}</Btn>}
+      {sel.size > 0 && <Btn variant="success" size="sm" onClick={() => { if (!confirm(`¿Marcar ${sel.size} factura(s) como pagadas?`)) return; sel.forEach(id => onUpdate(id, { status: "PAID" })); setSel(new Set()); }}>💰 Pagar {sel.size}</Btn>}
     </div>
 
     {payable.map(inv => {
