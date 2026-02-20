@@ -33,7 +33,7 @@ const RECURRING_TYPES = {
   installment: { label: "Cuota Tarjeta", icon: "💳", color: "#f59e0b" },
 };
 
-const CATEGORIES = ["Insumos", "Carnes", "Panificados", "Packaging", "Logística", "Servicios", "Alquiler", "Seguros", "Impuestos", "Suscripciones"];
+const DEFAULT_CATEGORIES = ["Insumos", "Carnes", "Panificados", "Packaging", "Logística", "Servicios", "Alquiler", "Seguros", "Impuestos", "Suscripciones"];
 
 function useIsMobile() {
   const [w, setW] = useState(1024);
@@ -175,6 +175,16 @@ export default function Home() {
   const [paySelection, setPaySelection] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [categories, setCategories] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const s = localStorage.getItem("caju_categories"); if (s) return JSON.parse(s); } catch {}
+    }
+    return DEFAULT_CATEGORIES;
+  });
+  const updateCategories = useCallback((newCats) => {
+    setCategories(newCats);
+    try { localStorage.setItem("caju_categories", JSON.stringify(newCats)); } catch {}
+  }, []);
 
   // ─── Auth ────────────────────────────────────────────────
   useEffect(() => {
@@ -526,8 +536,9 @@ export default function Home() {
         {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} />}
         {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
-        {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} />}
-        {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} />}
+        {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} />}
+        {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} />}
+        {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} categories={categories} />}
         {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} />}
       </main>
 
@@ -1012,9 +1023,11 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
 // ============================================================
 // RECURRING
 // ============================================================
-function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, mobile }) {
+function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, mobile, categories, updateCategories }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [showCatEditor, setShowCatEditor] = useState(false);
+  const [newCat, setNewCat] = useState("");
   const [form, setForm] = useState({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" });
   const grouped = useMemo(() => { const g = { fixed_cost: [], owner_withdrawal: [], installment: [] }; recurring.forEach(r => g[r.type]?.push(r)); return g; }, [recurring]);
   const total = recurring.filter(r => r.active).reduce((s, r) => s + r.amount, 0);
@@ -1065,8 +1078,27 @@ function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, m
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Fijos & Cuotas</h1>
-      <Btn size={mobile ? "sm" : "md"} onClick={() => { setEditId(null); setForm({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" }); setShowForm(!showForm); }}>+ Nuevo</Btn>
+      <div style={{ display: "flex", gap: 6 }}>
+        <Btn variant="secondary" size="sm" onClick={() => setShowCatEditor(!showCatEditor)}>🏷 Categorías</Btn>
+        <Btn size={mobile ? "sm" : "md"} onClick={() => { setEditId(null); setForm({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" }); setShowForm(!showForm); }}>+ Nuevo</Btn>
+      </div>
     </div>
+
+    {showCatEditor && <Card style={{ marginBottom: 14, border: "1px solid #e0e0e6" }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Editar Categorías</h3>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+        {categories.map(c => (
+          <div key={c} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", background: "#f7f7fa", borderRadius: 6, fontSize: 12, fontWeight: 500 }}>
+            {c}
+            <button onClick={() => { if (confirm(`¿Eliminar categoría "${c}"?`)) updateCategories(categories.filter(x => x !== c)); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: 0, lineHeight: 1 }}>✕</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input type="text" value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Nueva categoría..." onKeyDown={e => { if (e.key === "Enter" && newCat.trim()) { updateCategories([...categories, newCat.trim()]); setNewCat(""); } }} style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid #e0e0e6", fontSize: 13, outline: "none" }} />
+        <Btn size="sm" onClick={() => { if (newCat.trim()) { updateCategories([...categories, newCat.trim()]); setNewCat(""); } }}>+ Agregar</Btn>
+      </div>
+    </Card>}
 
     <Card style={{ marginBottom: 14, background: "linear-gradient(135deg, #1a1a2e, #2d2b55)", color: "#fff" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -1084,7 +1116,7 @@ function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, m
         <Input label="Nombre" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej: Alquiler" />
         <Input label="Monto" type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
         <Input label="Día del mes" type="number" value={form.day} onChange={e => setForm(f => ({ ...f, day: e.target.value }))} />
-        <Select label="Categoría" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{[...CATEGORIES, "Retiro", "Tarjeta"].map(c => <option key={c}>{c}</option>)}</Select>
+        <Select label="Categoría" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{[...categories, "Retiro", "Tarjeta"].map(c => <option key={c}>{c}</option>)}</Select>
         <Select label="Proveedor" value={form.supplier_id} onChange={e => setForm(f => ({ ...f, supplier_id: e.target.value }))}><option value="">— Ninguno —</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.alias}</option>)}</Select>
         {form.type === "installment" && <>
           <Input label="Total cuotas" type="number" value={form.total_installments} onChange={e => setForm(f => ({ ...f, total_installments: e.target.value }))} />
@@ -1120,7 +1152,7 @@ function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, m
 // ============================================================
 // SUPPLIERS
 // ============================================================
-function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDelete }) {
+function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDelete, categories }) {
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
   const [sel, setSel] = useState(new Set());
@@ -1174,7 +1206,7 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDele
         <Input label="Razón Social *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
         <Input label="Nombre Corto" value={form.alias} onChange={e => setForm(f => ({ ...f, alias: e.target.value }))} />
         <Input label="RUT *" value={form.tax_id} onChange={e => setForm(f => ({ ...f, tax_id: e.target.value }))} placeholder="21.XXX.XXX.0001" />
-        <Select label="Categoría" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</Select>
+        <Select label="Categoría" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{categories.map(c => <option key={c}>{c}</option>)}</Select>
         <Select label="Banco" value={form.bank} onChange={e => setForm(f => ({ ...f, bank: e.target.value }))}>{Object.keys(BANK_CODES).map(b => <option key={b}>{b}</option>)}</Select>
         <Select label="Tipo Cuenta" value={form.account_type} onChange={e => setForm(f => ({ ...f, account_type: e.target.value }))}><option value="CC">Cta Corriente</option><option value="CA">Caja Ahorro</option></Select>
         <Input label="N° Cuenta" value={form.account_number} onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} />
@@ -1225,7 +1257,7 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDele
 // ============================================================
 // SUPPLIER DETAIL
 // ============================================================
-function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, onDelete, notify, mobile }) {
+function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, onDelete, notify, mobile, categories }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ ...sup });
 
@@ -1271,7 +1303,7 @@ function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, onDelete, notif
           <Input label="Razón Social" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
           <Input label="Nombre Corto" value={form.alias} onChange={e => setForm(f => ({ ...f, alias: e.target.value }))} />
           <Input label="RUT" value={form.tax_id} onChange={e => setForm(f => ({ ...f, tax_id: e.target.value }))} />
-          <Select label="Categoría" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</Select>
+          <Select label="Categoría" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{categories.map(c => <option key={c}>{c}</option>)}</Select>
           <Input label="Teléfono" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
           <Input label="Email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
           <Input label="Contacto" value={form.contact} onChange={e => setForm(f => ({ ...f, contact: e.target.value }))} />
