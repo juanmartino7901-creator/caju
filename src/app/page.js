@@ -987,9 +987,9 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
     {payable.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
       const checked = sel.has(inv.id);
-      return <Card key={inv.id} style={{ padding: "10px 12px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
+      return <Card key={inv.id} onClick={() => toggle(inv.id)} style={{ padding: "10px 12px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff", cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <input type="checkbox" checked={checked} onChange={() => toggle(inv.id)} style={{ accentColor: "#e85d04", width: 18, height: 18, flexShrink: 0 }} />
+          <input type="checkbox" checked={checked} readOnly style={{ accentColor: "#e85d04", width: 18, height: 18, flexShrink: 0, cursor: "pointer" }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ minWidth: 0 }}>
