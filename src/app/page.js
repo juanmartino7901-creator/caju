@@ -790,7 +790,7 @@ function DocPreview({ inv }) {
     setLoading(true);
     setError(false);
 
-    const storagePath = inv.file_path.replace(/^invoices\//, "");
+    const storagePath = inv.file_path;
 
     // Try public URL first, then fall back to signed URL
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/invoices/${storagePath}`;
