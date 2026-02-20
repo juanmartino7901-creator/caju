@@ -326,6 +326,11 @@ export default function Home() {
 
   // ─── Update invoice: write to Supabase then update local state ───
   const updateInvoice = useCallback(async (id, updates) => {
+    // Auto-set payment_date when marking as PAID
+    if (updates.status === "PAID" && !updates.payment_date) {
+      updates.payment_date = new Date().toISOString().split("T")[0];
+    }
+
     // Optimistic update
     setInvoices(prev => prev.map(inv => inv.id === id ? {
       ...inv, ...updates,
@@ -336,6 +341,7 @@ export default function Home() {
     // Persist to Supabase
     try {
       const dbUpdates = { status: updates.status, updated_at: new Date().toISOString() };
+      if (updates.status === "PAID") dbUpdates.payment_date = updates.payment_date;
       if (updates.supplier_id !== undefined) dbUpdates.supplier_id = updates.supplier_id;
       if (updates.invoice_number !== undefined) dbUpdates.invoice_number = updates.invoice_number;
       if (updates.issue_date !== undefined) dbUpdates.issue_date = updates.issue_date;
@@ -784,9 +790,9 @@ function DocPreview({ inv }) {
     setLoading(true);
     setError(false);
 
-    const storagePath = inv.file_path;
+    const storagePath = inv.file_path.replace(/^invoices\//, "");
 
-    // Public URL: bucket name is "invoices", file_path already includes subfolder
+    // Try public URL first, then fall back to signed URL
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/invoices/${storagePath}`;
 
     // Test if public URL works
@@ -966,11 +972,27 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
 // PAYABLES
 // ============================================================
 function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notify, mobile }) {
+  const [showHistory, setShowHistory] = useState(false);
   const payable = invoices.filter(i => ["APPROVED", "SCHEDULED"].includes(i.status)).sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+  const paidInvoices = invoices.filter(i => i.status === "PAID").sort((a, b) => new Date(b.payment_date || b.created_at) - new Date(a.payment_date || a.created_at));
   const totalPay = payable.reduce((s, i) => s + i.total, 0);
+  const totalPaid = paidInvoices.reduce((s, i) => s + i.total, 0);
   const monthlyFixed = recurring.filter(r => r.active).reduce((s, r) => s + r.amount, 0);
   const selTotal = payable.filter(i => sel.has(i.id)).reduce((s, i) => s + i.total, 0);
   const toggle = id => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  // Group paid invoices by month
+  const paidByMonth = useMemo(() => {
+    const groups = {};
+    paidInvoices.forEach(inv => {
+      const d = inv.payment_date || inv.created_at?.split("T")[0] || "Sin fecha";
+      const key = d.slice(0, 7); // YYYY-MM
+      if (!groups[key]) groups[key] = { invoices: [], total: 0 };
+      groups[key].invoices.push(inv);
+      groups[key].total += inv.total;
+    });
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [paidInvoices]);
 
   // ─── Itaú TXT Generator (Diseño Clásico - Pago Proveedores) ───
   const generateItauTxt = () => {
@@ -1064,10 +1086,11 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
       </div>
     </div>
 
-    <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
-      <Card style={{ padding: 12 }}><div style={{ fontSize: 10, color: "#8b8b9e", fontWeight: 600, textTransform: "uppercase" }}>Facturas</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3 }}>{fmt(totalPay)}</div></Card>
+    <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+      <Card style={{ padding: 12 }}><div style={{ fontSize: 10, color: "#8b8b9e", fontWeight: 600, textTransform: "uppercase" }}>Por Pagar</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3 }}>{fmt(totalPay)}</div><div style={{ fontSize: 10, color: "#8b8b9e" }}>{payable.length} facturas</div></Card>
       <Card style={{ padding: 12 }}><div style={{ fontSize: 10, color: "#8b8b9e", fontWeight: 600, textTransform: "uppercase" }}>Fijos Mes</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3 }}>{fmt(monthlyFixed)}</div></Card>
-      <Card style={{ padding: 12 }}><div style={{ fontSize: 10, color: "#8b8b9e", fontWeight: 600, textTransform: "uppercase" }}>Total</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3, color: "#e85d04" }}>{fmt(totalPay + monthlyFixed)}</div></Card>
+      <Card style={{ padding: 12 }}><div style={{ fontSize: 10, color: "#8b8b9e", fontWeight: 600, textTransform: "uppercase" }}>Total Mes</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3, color: "#e85d04" }}>{fmt(totalPay + monthlyFixed)}</div></Card>
+      <Card style={{ padding: 12, cursor: "pointer", border: showHistory ? "1px solid #059669" : undefined }} onClick={() => setShowHistory(!showHistory)}><div style={{ fontSize: 10, color: "#059669", fontWeight: 600, textTransform: "uppercase" }}>Pagado ✓</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3, color: "#059669" }}>{fmt(totalPaid)}</div><div style={{ fontSize: 10, color: "#8b8b9e" }}>{paidInvoices.length} facturas</div></Card>
       {sel.size > 0 && <Card style={{ padding: 12, border: "1px solid #e85d04" }}><div style={{ fontSize: 10, color: "#e85d04", fontWeight: 600, textTransform: "uppercase" }}>Selección</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3 }}>{fmt(selTotal)}</div></Card>}
     </div>
 
@@ -1097,7 +1120,52 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
         </div>
       </Card>;
     })}
-    {payable.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>✅</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>Sin pagos pendientes</div></Card>}
+    {payable.length === 0 && !showHistory && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>✅</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>Sin pagos pendientes</div></Card>}
+
+    {/* ─── Historial de Pagos ─────────────────────────────── */}
+    <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 800, cursor: "pointer" }} onClick={() => setShowHistory(!showHistory)}>
+          {showHistory ? "▾" : "▸"} Historial de Pagos
+          <span style={{ fontSize: 12, fontWeight: 500, color: "#8b8b9e", marginLeft: 6 }}>({paidInvoices.length})</span>
+        </h2>
+        {showHistory && paidInvoices.length > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>Total: {fmt(totalPaid)}</span>}
+      </div>
+
+      {showHistory && paidByMonth.map(([month, group]) => {
+        const monthLabel = new Date(month + "-15").toLocaleDateString("es-UY", { month: "long", year: "numeric" }).replace(/^\w/, c => c.toUpperCase());
+        return <div key={month} style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, padding: "4px 0", borderBottom: "2px solid #d1fae5" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>{monthLabel}</span>
+            <span style={{ fontSize: 13, fontWeight: 800, color: "#059669" }}>{fmt(group.total)}</span>
+          </div>
+          {group.invoices.map(inv => {
+            const sup = getSup(suppliers, inv.supplier_id);
+            return <Card key={inv.id} style={{ padding: "8px 12px", marginBottom: 4, background: "#f9fefb", borderLeft: "3px solid #a7f3d0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{sup.alias || sup.name || "—"}</span>
+                    <span style={{ fontSize: 10, color: "#059669", fontWeight: 600, padding: "1px 5px", background: "#d1fae5", borderRadius: 4 }}>💰 Pagada</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 3, fontSize: 11, color: "#8b8b9e" }}>
+                    <span>{inv.invoice_number}</span>
+                    <span>Emitida: {fmtDate(inv.issue_date)}</span>
+                    {inv.payment_date && <span>Pagada: {fmtDate(inv.payment_date)}</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 10 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#059669" }}>{fmt(inv.total, inv.currency)}</div>
+                  {sup.bank && sup.bank !== "—" && <div style={{ fontSize: 10, color: "#8b8b9e" }}>{sup.bank} · {sup.account_number}</div>}
+                </div>
+              </div>
+            </Card>;
+          })}
+        </div>;
+      })}
+
+      {showHistory && paidInvoices.length === 0 && <Card style={{ textAlign: "center", padding: 20 }}><div style={{ fontSize: 12, color: "#8b8b9e" }}>No hay pagos registrados aún</div></Card>}
+    </div>
   </div>;
 }
 
