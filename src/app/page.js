@@ -784,9 +784,9 @@ function DocPreview({ inv }) {
     setLoading(true);
     setError(false);
 
-    const storagePath = inv.file_path.replace(/^invoices\//, "");
+    const storagePath = inv.file_path;
 
-    // Try public URL first, then fall back to signed URL
+    // Public URL: bucket name is "invoices", file_path already includes subfolder
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/invoices/${storagePath}`;
 
     // Test if public URL works
