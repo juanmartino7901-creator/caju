@@ -653,48 +653,52 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
     if (ok) setSel(new Set());
   };
 
-  const handleUpload = async (file) => {
-    if (!file) return;
+  const handleUpload = async (files) => {
+    if (!files || files.length === 0) return;
     const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
-    if (!allowed.includes(file.type)) { notify("Formato no soportado. Usá PDF, JPG o PNG.", "error"); return; }
-    if (file.size > 10 * 1024 * 1024) { notify("Archivo demasiado grande (máx 10MB)", "error"); return; }
+    const valid = Array.from(files).filter(f => {
+      if (!allowed.includes(f.type)) { notify(`${f.name}: formato no soportado`, "error"); return false; }
+      if (f.size > 10 * 1024 * 1024) { notify(`${f.name}: demasiado grande (máx 10MB)`, "error"); return false; }
+      return true;
+    });
+    if (valid.length === 0) return;
 
     setUploading(true);
-    setUploadProgress("Subiendo archivo...");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      setUploadProgress("Extrayendo datos con AI...");
-      const res = await fetch("/api/invoices", { method: "POST", body: formData });
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (res.status === 409) { notify("Esta factura ya fue subida", "error"); }
-        else { notify(data.error || "Error subiendo factura", "error"); }
-        return;
+    let ok = 0, fail = 0;
+    for (let i = 0; i < valid.length; i++) {
+      const file = valid[i];
+      setUploadProgress(`Procesando ${i + 1} de ${valid.length}: ${file.name}`);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/invoices", { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          if (res.status === 409) notify(`${file.name}: ya fue subida`, "error");
+          else notify(`${file.name}: ${data.error || "error"}`, "error");
+          fail++;
+        } else {
+          ok++;
+        }
+      } catch (err) {
+        console.error("Upload error:", err);
+        fail++;
       }
+    }
 
-      setShowUpload(false);
-      notify(data.supplier_matched
-        ? `✅ Factura extraída — ${data.extracted.emisor_nombre}`
-        : data.supplier_created
-        ? `✅ Factura extraída — Proveedor "${data.extracted.emisor_nombre}" creado automáticamente`
-        : `✅ Factura extraída — Revisá los datos del proveedor`
-      );
-
+    setShowUpload(false);
+    setUploading(false);
+    setUploadProgress("");
+    if (ok > 0) {
+      notify(`✅ ${ok} factura(s) subida(s)${fail > 0 ? ` · ${fail} con error` : ""}`);
       if (onInvoiceUploaded) onInvoiceUploaded();
-    } catch (err) {
-      console.error("Upload error:", err);
-      notify("Error de conexión al subir factura", "error");
-    } finally {
-      setUploading(false);
-      setUploadProgress("");
+    } else {
+      notify(`Error subiendo ${fail} factura(s)`, "error");
     }
   };
 
-  const onFileSelect = (e) => { if (e.target.files?.[0]) handleUpload(e.target.files[0]); e.target.value = ""; };
-  const onDrop = (e) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.[0]) handleUpload(e.dataTransfer.files[0]); };
+  const onFileSelect = (e) => { if (e.target.files?.length) handleUpload(e.target.files); e.target.value = ""; };
+  const onDrop = (e) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) handleUpload(e.dataTransfer.files); };
 
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -717,10 +721,10 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       </> : <>
         <div style={{ fontSize: 32, marginBottom: 4, opacity: 0.3 }}>📄</div>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#e85d04" }}>Arrastrá archivos o tocá para seleccionar</div>
-        <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 3 }}>PDF, JPG, PNG — Máx 10 MB</div>
+        <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 3 }}>PDF, JPG, PNG — Máx 10 MB — Podés subir varios a la vez</div>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 12, padding: "8px 16px", borderRadius: 8, background: "#e85d04", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           📁 Elegir archivo
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={onFileSelect} style={{ display: "none" }} />
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" multiple onChange={onFileSelect} style={{ display: "none" }} />
         </label>
       </>}
     </Card>}
