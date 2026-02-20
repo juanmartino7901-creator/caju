@@ -159,9 +159,10 @@ export async function POST(request) {
       return NextResponse.json({ error: "Error procesando la factura con AI", raw: responseText }, { status: 500 });
     }
 
-    // ─── Match supplier by RUT ──────────────────────────────
+    // ─── Match or create supplier by RUT ────────────────────
     let supplierId = null;
     let supplierMatched = false;
+    let supplierCreated = false;
 
     if (extracted.emisor_rut) {
       const { data: matchedSup } = await supabase
@@ -173,6 +174,28 @@ export async function POST(request) {
       if (matchedSup) {
         supplierId = matchedSup.id;
         supplierMatched = true;
+      } else {
+        // Auto-create supplier from invoice data
+        const newSupplier = {
+          name: extracted.emisor_nombre || "Proveedor Desconocido",
+          alias: (extracted.emisor_nombre || "").split(/\s+(S\.?A\.?S?|S\.?R\.?L|LTDA|S\.?A\.?)/i)[0].trim() || extracted.emisor_nombre || "Nuevo",
+          tax_id: extracted.emisor_rut,
+          category: "Servicios",
+          payment_terms: extracted.payment_terms || "Contado",
+        };
+
+        const { data: createdSup, error: createErr } = await supabase
+          .from("suppliers")
+          .insert(newSupplier)
+          .select("id")
+          .single();
+
+        if (!createErr && createdSup) {
+          supplierId = createdSup.id;
+          supplierCreated = true;
+        } else {
+          console.error("Error creating supplier:", createErr);
+        }
       }
     }
 
@@ -215,7 +238,7 @@ export async function POST(request) {
       event_type: "created",
       from_status: null,
       to_status: initialStatus,
-      notes: `Factura subida y extraída por AI — ${supplierMatched ? "Proveedor matcheado" : "Proveedor no encontrado"}`,
+      notes: `Factura subida y extraída por AI — ${supplierMatched ? "Proveedor matcheado" : supplierCreated ? "Proveedor creado automáticamente" : "Sin proveedor"}`,
     });
 
     return NextResponse.json({
@@ -223,6 +246,7 @@ export async function POST(request) {
       invoice: newInvoice,
       extracted,
       supplier_matched: supplierMatched,
+      supplier_created: supplierCreated,
       supplier_id: supplierId,
     });
   } catch (err) {

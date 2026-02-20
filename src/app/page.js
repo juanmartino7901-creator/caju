@@ -538,7 +538,9 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       setShowUpload(false);
       notify(data.supplier_matched
         ? `✅ Factura extraída — ${data.extracted.emisor_nombre}`
-        : `✅ Factura extraída — Proveedor no encontrado, revisá los datos`
+        : data.supplier_created
+        ? `✅ Factura extraída — Proveedor "${data.extracted.emisor_nombre}" creado automáticamente`
+        : `✅ Factura extraída — Revisá los datos del proveedor`
       );
 
       if (onInvoiceUploaded) onInvoiceUploaded();
