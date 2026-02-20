@@ -998,7 +998,75 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
     return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
   }, [paidInvoices]);
 
-  // ─── Itaú TXT Generator (Diseño Clásico - Pago Proveedores) ───
+  // ─── Excel Generator ───────────────────────────────────
+  const generateExcel = async () => {
+    const selected = sel.size > 0 ? payable.filter(i => sel.has(i.id)) : payable;
+    if (selected.length === 0) { notify("No hay facturas para exportar", "error"); return; }
+
+    // Load SheetJS dynamically
+    if (!window.XLSX) {
+      const script = document.createElement("script");
+      script.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+      document.head.appendChild(script);
+      await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
+    }
+    const XLSX = window.XLSX;
+
+    // Sheet 1: Detalle de facturas
+    const detailRows = selected.map(inv => {
+      const sup = getSup(suppliers, inv.supplier_id);
+      return {
+        "Proveedor": sup.name || "—",
+        "Alias": sup.alias || "—",
+        "RUT": sup.tax_id || "—",
+        "N° Factura": inv.invoice_number,
+        "Emisión": inv.issue_date || "—",
+        "Vencimiento": inv.due_date || "—",
+        "Moneda": inv.currency,
+        "Subtotal": inv.subtotal,
+        "IVA": inv.tax_amount,
+        "Total": inv.total,
+        "Estado": STATUSES[inv.status]?.label || inv.status,
+        "Banco": sup.bank || "—",
+        "Cuenta": sup.account_number || "—",
+      };
+    });
+
+    // Sheet 2: Resumen por proveedor
+    const bySupplier = {};
+    selected.forEach(inv => {
+      const sup = getSup(suppliers, inv.supplier_id);
+      const key = sup.name || "Sin proveedor";
+      if (!bySupplier[key]) bySupplier[key] = { proveedor: key, alias: sup.alias || "—", rut: sup.tax_id || "—", facturas: 0, total: 0 };
+      bySupplier[key].facturas++;
+      bySupplier[key].total += inv.total;
+    });
+    const summaryRows = Object.values(bySupplier).sort((a, b) => b.total - a.total).map(s => ({
+      "Proveedor": s.proveedor,
+      "Alias": s.alias,
+      "RUT": s.rut,
+      "Facturas": s.facturas,
+      "Total": s.total,
+    }));
+    // Add total row
+    summaryRows.push({ "Proveedor": "TOTAL", "Alias": "", "RUT": "", "Facturas": selected.length, "Total": selected.reduce((s, i) => s + i.total, 0) });
+
+    // Build workbook
+    const wb = XLSX.utils.book_new();
+    const ws1 = XLSX.utils.json_to_sheet(detailRows);
+    const ws2 = XLSX.utils.json_to_sheet(summaryRows);
+
+    // Set column widths
+    ws1["!cols"] = [{ wch: 30 }, { wch: 15 }, { wch: 14 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    ws2["!cols"] = [{ wch: 30 }, { wch: 15 }, { wch: 14 }, { wch: 10 }, { wch: 14 }];
+
+    XLSX.utils.book_append_sheet(wb, ws1, "Detalle");
+    XLSX.utils.book_append_sheet(wb, ws2, "Resumen");
+
+    const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
+    XLSX.writeFile(wb, `pagos_${today}.xlsx`);
+    notify(`📊 Excel generado: ${selected.length} facturas`);
+  };
   const generateItauTxt = () => {
     if (sel.size === 0) { notify("Seleccioná facturas", "error"); return; }
 
@@ -1085,7 +1153,7 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Pagos</h1>
       <div style={{ display: "flex", gap: 6 }}>
-        <Btn variant="secondary" size="sm" onClick={() => sel.size > 0 ? notify(`Excel: ${sel.size} pagos`) : notify("Seleccioná facturas", "error")}>📊 Excel</Btn>
+        <Btn variant="secondary" size="sm" onClick={generateExcel}>📊 Excel</Btn>
         <Btn size="sm" onClick={generateItauTxt}>🏦 Itaú</Btn>
       </div>
     </div>
