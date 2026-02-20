@@ -317,15 +317,25 @@ export default function Home() {
     // Optimistic update
     setInvoices(prev => prev.map(inv => inv.id === id ? {
       ...inv, ...updates,
-      events: [...inv.events, { type: "change", by: "Juan", at: new Date().toISOString().split("T")[0], note: `→ ${STATUSES[updates.status]?.label}` }]
+      events: [...inv.events, { type: "change", by: userName, at: new Date().toISOString().split("T")[0], note: `→ ${STATUSES[updates.status]?.label}` }]
     } : inv));
     notify(`Factura → ${STATUSES[updates.status]?.label}`);
 
     // Persist to Supabase
     try {
+      const dbUpdates = { status: updates.status, updated_at: new Date().toISOString() };
+      if (updates.supplier_id !== undefined) dbUpdates.supplier_id = updates.supplier_id;
+      if (updates.invoice_number !== undefined) dbUpdates.invoice_number = updates.invoice_number;
+      if (updates.issue_date !== undefined) dbUpdates.issue_date = updates.issue_date;
+      if (updates.due_date !== undefined) dbUpdates.due_date = updates.due_date;
+      if (updates.subtotal !== undefined) dbUpdates.subtotal = updates.subtotal;
+      if (updates.tax_amount !== undefined) dbUpdates.tax_amount = updates.tax_amount;
+      if (updates.total !== undefined) dbUpdates.total = updates.total;
+      if (updates.currency !== undefined) dbUpdates.currency = updates.currency;
+
       const { error: updErr } = await supabase
         .from("invoices")
-        .update({ status: updates.status, updated_at: new Date().toISOString() })
+        .update(dbUpdates)
         .eq("id", id);
       if (updErr) throw updErr;
 
@@ -333,13 +343,13 @@ export default function Home() {
       await supabase.from("invoice_events").insert({
         invoice_id: id,
         event_type: "status_change",
-        notes: `→ ${STATUSES[updates.status]?.label} por Juan`,
+        notes: `→ ${STATUSES[updates.status]?.label || "Editado"} por ${userName}`,
       });
     } catch (err) {
       console.error("Cajú: Error updating invoice", err);
       notify("Error al guardar cambio", "error");
     }
-  }, [notify]);
+  }, [notify, userName]);
 
   const stats = useMemo(() => {
     const pending = invoices.filter(i => ["EXTRACTED", "REVIEW_REQUIRED", "APPROVED", "SCHEDULED"].includes(i.status));
@@ -352,6 +362,51 @@ export default function Home() {
 
   const selInv = selectedId && view === "inbox" ? invoices.find(i => i.id === selectedId) : null;
   const selSup = selectedId && view === "suppliers" ? suppliers.find(s => s.id === selectedId) : null;
+
+  // ─── Delete functions ───────────────────────────────────
+  const deleteInvoice = useCallback(async (id) => {
+    if (!confirm("¿Eliminar esta factura? Esta acción no se puede deshacer.")) return;
+    try {
+      await supabase.from("invoice_events").delete().eq("invoice_id", id);
+      const { error } = await supabase.from("invoices").delete().eq("id", id);
+      if (error) throw error;
+      setInvoices(prev => prev.filter(i => i.id !== id));
+      notify("Factura eliminada");
+      nav("inbox");
+    } catch (err) {
+      console.error("Delete invoice error:", err);
+      notify("Error al eliminar factura", "error");
+    }
+  }, [notify, nav]);
+
+  const deleteSupplier = useCallback(async (id) => {
+    const hasInvoices = invoices.some(i => i.supplier_id === id);
+    if (hasInvoices) { notify("No se puede eliminar: tiene facturas asociadas", "error"); return; }
+    if (!confirm("¿Eliminar este proveedor?")) return;
+    try {
+      const { error } = await supabase.from("suppliers").delete().eq("id", id);
+      if (error) throw error;
+      setSuppliers(prev => prev.filter(s => s.id !== id));
+      notify("Proveedor eliminado");
+      nav("suppliers");
+    } catch (err) {
+      console.error("Delete supplier error:", err);
+      notify("Error al eliminar proveedor", "error");
+    }
+  }, [invoices, notify, nav]);
+
+  const deleteRecurring = useCallback(async (id) => {
+    if (!confirm("¿Eliminar este gasto recurrente?")) return;
+    try {
+      const { error } = await supabase.from("recurring_expenses").delete().eq("id", id);
+      if (error) throw error;
+      setRecurring(prev => prev.filter(r => r.id !== id));
+      notify("Gasto eliminado");
+    } catch (err) {
+      console.error("Delete recurring error:", err);
+      notify("Error al eliminar", "error");
+    }
+  }, [notify]);
 
   // ─── Auth / Loading / Error screens ────────────────────
   if (authLoading) return <LoadingScreen />;
@@ -414,11 +469,11 @@ export default function Home() {
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
         {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} />}
-        {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} onBack={() => nav("inbox")} onUpdate={updateInvoice} mobile={mobile} />}
+        {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
-        {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} mobile={mobile} />}
+        {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} />}
         {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} />}
-        {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} mobile={mobile} />}
+        {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} />}
       </main>
 
       {mobile && <BottomNav />}
@@ -449,7 +504,7 @@ function Dashboard({ stats, invoices, recurring, suppliers, nav, mobile }) {
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ marginBottom: 14 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Dashboard</h1>
-      <p style={{ fontSize: 12, color: "#8b8b9e", marginTop: 2 }}>Febrero 2026</p>
+      <p style={{ fontSize: 12, color: "#8b8b9e", marginTop: 2 }}>{new Date().toLocaleDateString("es-UY", { month: "long", year: "numeric" }).replace(/^\w/, c => c.toUpperCase())}</p>
     </div>
 
     <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
@@ -623,7 +678,21 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
 // ============================================================
 // INVOICE DETAIL
 // ============================================================
-function InvDetail({ inv, sup, onBack, onUpdate, mobile }) {
+function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mobile }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    invoice_number: inv.invoice_number, issue_date: inv.issue_date || "", due_date: inv.due_date || "",
+    subtotal: inv.subtotal, tax_amount: inv.tax_amount, total: inv.total, currency: inv.currency,
+    supplier_id: inv.supplier_id || "",
+  });
+
+  const saveEdits = () => {
+    const updates = { ...form, subtotal: Number(form.subtotal), tax_amount: Number(form.tax_amount), total: Number(form.total), status: inv.status };
+    onUpdate(inv.id, updates);
+    setEditing(false);
+    notify("Datos actualizados");
+  };
+
   const actions = [];
   if (["EXTRACTED", "REVIEW_REQUIRED"].includes(inv.status)) {
     actions.push({ label: "Aprobar", status: "APPROVED", variant: "success", icon: "✅" });
@@ -635,7 +704,7 @@ function InvDetail({ inv, sup, onBack, onUpdate, mobile }) {
   if (inv.status === "DISPUTE") { actions.push({ label: "Aprobar", status: "APPROVED", variant: "success", icon: "✅" }); actions.push({ label: "Rechazar", status: "REJECTED", variant: "danger", icon: "✕" }); }
 
   const fields = [
-    ["Proveedor", sup.name, "supplier_name"], ["RUT", sup.tax_id, "tax_id"], ["N° Factura", inv.invoice_number, "invoice_number"],
+    ["Proveedor", sup.name || "— Sin asignar —", "supplier_name"], ["RUT", sup.tax_id || "—", "tax_id"], ["N° Factura", inv.invoice_number, "invoice_number"],
     ["Emisión", fmtDateFull(inv.issue_date), "issue_date"], ["Vencimiento", fmtDateFull(inv.due_date), "due_date"],
     ["Subtotal", fmt(inv.subtotal)], ["IVA", fmt(inv.tax_amount), "tax_amount"], ["Total", fmt(inv.total), "total"],
   ];
@@ -644,7 +713,7 @@ function InvDetail({ inv, sup, onBack, onUpdate, mobile }) {
     <Btn variant="ghost" onClick={onBack} size="sm" style={{ marginBottom: 10 }}>← Volver</Btn>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
       <div>
-        <h1 style={{ fontSize: mobile ? 18 : 20, fontWeight: 800 }}>{sup.alias || sup.name}</h1>
+        <h1 style={{ fontSize: mobile ? 18 : 20, fontWeight: 800 }}>{sup.alias || sup.name || inv.invoice_number}</h1>
         <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color: "#6b7280" }}>{inv.invoice_number}</span>
           <Badge status={inv.status} size="md" />
@@ -655,24 +724,42 @@ function InvDetail({ inv, sup, onBack, onUpdate, mobile }) {
     </div>
 
     {actions.length > 0 && <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-      {actions.map((a, i) => <Btn key={i} variant={a.variant} size={mobile ? "lg" : "md"} onClick={() => onUpdate(inv.id, { status: a.status })} style={{ flex: mobile ? "1 1 auto" : undefined }}>{a.icon} {a.label}</Btn>)}
+      {actions.map((a, i) => <Btn key={i} variant={a.variant} size={mobile ? "lg" : "md"} onClick={() => { if (confirm(`¿${a.label} esta factura?`)) onUpdate(inv.id, { status: a.status }); }} style={{ flex: mobile ? "1 1 auto" : undefined }}>{a.icon} {a.label}</Btn>)}
     </div>}
 
     <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 14 }}>
       <Card>
-        <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Datos Extraídos</h3>
-        {fields.map(([label, value, key], i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #f5f5f8" }}>
-            <span style={{ fontSize: 12, color: "#8b8b9e" }}>{label}</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{value}</span>
-              {key && inv.confidence[key] != null && <span style={{ fontSize: 9, fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: inv.confidence[key] >= 0.9 ? "#d1fae5" : inv.confidence[key] >= 0.8 ? "#fef3c7" : "#fee2e2", color: inv.confidence[key] >= 0.9 ? "#059669" : inv.confidence[key] >= 0.8 ? "#d97706" : "#dc2626" }}>{Math.round(inv.confidence[key] * 100)}%</span>}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <h3 style={{ fontSize: 13, fontWeight: 700 }}>Datos Extraídos</h3>
+          <Btn variant={editing ? "primary" : "secondary"} size="sm" onClick={() => { if (editing) saveEdits(); else { setForm({ invoice_number: inv.invoice_number, issue_date: inv.issue_date || "", due_date: inv.due_date || "", subtotal: inv.subtotal, tax_amount: inv.tax_amount, total: inv.total, currency: inv.currency, supplier_id: inv.supplier_id || "" }); setEditing(true); } }}>{editing ? "💾 Guardar" : "✏️ Editar"}</Btn>
+        </div>
+        {editing ? <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <Select label="Proveedor" value={form.supplier_id} onChange={e => setForm(f => ({ ...f, supplier_id: e.target.value }))}>
+            <option value="">— Sin asignar —</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.alias || s.name} ({s.tax_id})</option>)}
+          </Select>
+          <Input label="N° Factura" value={form.invoice_number} onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))} />
+          <Input label="Emisión" type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} />
+          <Input label="Vencimiento" type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} />
+          <Input label="Subtotal" type="number" value={form.subtotal} onChange={e => setForm(f => ({ ...f, subtotal: e.target.value }))} />
+          <Input label="IVA" type="number" value={form.tax_amount} onChange={e => setForm(f => ({ ...f, tax_amount: e.target.value }))} />
+          <Input label="Total" type="number" value={form.total} onChange={e => setForm(f => ({ ...f, total: e.target.value }))} />
+          <Select label="Moneda" value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}><option>UYU</option><option>USD</option></Select>
+          <Btn variant="secondary" size="sm" onClick={() => setEditing(false)}>Cancelar</Btn>
+        </div> : <div>
+          {fields.map(([label, value, key], i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #f5f5f8" }}>
+              <span style={{ fontSize: 12, color: "#8b8b9e" }}>{label}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{value}</span>
+                {key && inv.confidence[key] != null && <span style={{ fontSize: 9, fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: inv.confidence[key] >= 0.9 ? "#d1fae5" : inv.confidence[key] >= 0.8 ? "#fef3c7" : "#fee2e2", color: inv.confidence[key] >= 0.9 ? "#059669" : inv.confidence[key] >= 0.8 ? "#d97706" : "#dc2626" }}>{Math.round(inv.confidence[key] * 100)}%</span>}
+              </div>
             </div>
-          </div>
-        ))}
-        {sup.bank && sup.bank !== "—" && <div style={{ marginTop: 8, padding: "8px 10px", background: "#f7f7fa", borderRadius: 7, fontSize: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: "#8b8b9e", marginBottom: 3 }}>BANCO PROVEEDOR</div>
-          {sup.bank} · {sup.account_type} · {sup.account_number}
+          ))}
+          {sup.bank && sup.bank !== "—" && <div style={{ marginTop: 8, padding: "8px 10px", background: "#f7f7fa", borderRadius: 7, fontSize: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#8b8b9e", marginBottom: 3 }}>BANCO PROVEEDOR</div>
+            {sup.bank} · {sup.account_type} · {sup.account_number}
+          </div>}
         </div>}
       </Card>
       <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#fafafa", minHeight: 160 }}>
@@ -681,17 +768,21 @@ function InvDetail({ inv, sup, onBack, onUpdate, mobile }) {
       </Card>
     </div>
 
-    <Card>
-      <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Historial</h3>
-      {inv.events.map((e, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #f5f5f8", fontSize: 12 }}>
-          <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#e85d04", flexShrink: 0 }}/>
-          <span style={{ flex: 1 }}>{e.note} <span style={{ color: "#8b8b9e" }}>— {e.by}</span></span>
-          <span style={{ color: "#b0b0c0", fontSize: 11 }}>{fmtDate(e.at)}</span>
-        </div>
-      ))}
-      {inv.events.length === 0 && <div style={{ fontSize: 12, color: "#8b8b9e", textAlign: "center", padding: 8 }}>Sin eventos</div>}
-    </Card>
+    <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+      <Card style={{ flex: 1 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Historial</h3>
+        {inv.events.map((e, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #f5f5f8", fontSize: 12 }}>
+            <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#e85d04", flexShrink: 0 }}/>
+            <span style={{ flex: 1 }}>{e.note} <span style={{ color: "#8b8b9e" }}>— {e.by}</span></span>
+            <span style={{ color: "#b0b0c0", fontSize: 11 }}>{fmtDate(e.at)}</span>
+          </div>
+        ))}
+        {inv.events.length === 0 && <div style={{ fontSize: 12, color: "#8b8b9e", textAlign: "center", padding: 8 }}>Sin eventos</div>}
+      </Card>
+    </div>
+
+    <Btn variant="danger" size="sm" onClick={() => onDelete(inv.id)}>🗑 Eliminar factura</Btn>
   </div>;
 }
 
@@ -710,8 +801,8 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
     if (sel.size === 0) { notify("Seleccioná facturas", "error"); return; }
 
     const MONTHS = { 0: "JAN", 1: "FEB", 2: "MAR", 3: "APR", 4: "MAY", 5: "JUN", 6: "JUL", 7: "AUG", 8: "SEP", 9: "OCT", 10: "NOV", 11: "DEC" };
-    const DEBIT_ACCOUNT = "1234567"; // Will be overridden by env if available
-    const OFFICE_CODE = "04";
+    const DEBIT_ACCOUNT = process.env.NEXT_PUBLIC_ITAU_DEBIT_ACCOUNT || "1234567";
+    const OFFICE_CODE = process.env.NEXT_PUBLIC_ITAU_OFFICE_CODE || "04";
 
     const fmtItauDate = (dateStr) => {
       const d = dateStr ? new Date(dateStr + "T12:00:00") : new Date();
@@ -837,7 +928,7 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
 // ============================================================
 // RECURRING
 // ============================================================
-function RecurringView({ recurring, setRecurring, suppliers, mobile }) {
+function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, mobile }) {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" });
@@ -933,6 +1024,7 @@ function RecurringView({ recurring, setRecurring, suppliers, mobile }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
               <div style={{ textAlign: "right" }}><div style={{ fontSize: 16, fontWeight: 800, color: type.color }}>{fmt(item.amount)}</div>{item.total_installments && <div style={{ width: 90, marginTop: 2 }}><Progress current={item.current_installment} total={item.total_installments} color={type.color} /></div>}</div>
               <button onClick={() => startEdit(item)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: 4 }}>✏️</button>
+              <button onClick={() => onDelete(item.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: 4 }}>🗑</button>
             </div>
           </div>
         </Card>;
@@ -1032,7 +1124,7 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile }) {
 // ============================================================
 // SUPPLIER DETAIL
 // ============================================================
-function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, mobile }) {
+function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, onDelete, notify, mobile }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ ...sup });
 
@@ -1125,5 +1217,7 @@ function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, mobile }) {
       </div>)}
       {invs.length === 0 && <div style={{ fontSize: 12, color: "#8b8b9e", textAlign: "center", padding: 12 }}>Sin facturas</div>}
     </Card>
+
+    <div style={{ marginTop: 14 }}><Btn variant="danger" size="sm" onClick={() => onDelete(sup.id)}>🗑 Eliminar proveedor</Btn></div>
   </div>;
 }
