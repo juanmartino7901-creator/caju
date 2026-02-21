@@ -529,7 +529,7 @@ export default function Home() {
     <div style={{ display: "flex", height: "100vh", fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7fa", color: "#1a1a2e" }}>
       {!mobile && <Sidebar />}
 
-      <main style={{ flex: 1, overflow: "auto", padding: mobile ? "12px 12px 72px" : 22 }}>
+      <main style={{ flex: 1, overflow: "auto", overflowX: "hidden", padding: mobile ? "12px 12px 72px" : 22, minWidth: 0 }}>
         {mobile && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "4px 0" }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -606,7 +606,7 @@ function Dashboard({ stats, invoices, recurring, suppliers, nav, mobile }) {
           const sup = getSup(suppliers, inv.supplier_id);
           return <div key={inv.id} onClick={() => nav("inbox", inv.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #f3f3f6", cursor: "pointer" }}>
             <div><div style={{ fontSize: 13, fontWeight: 500 }}>{sup.alias}</div><div style={{ fontSize: 10, color: "#8b8b9e" }}>{inv.invoice_number}</div></div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 13, fontWeight: 700 }}>{fmt(inv.total)}</span><DueBadge d={inv.due_date} /></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 13, fontWeight: 700 }}>{fmt(inv.total, inv.currency)}</span><DueBadge d={inv.due_date} /></div>
           </div>;
         })}
       </Card>
@@ -635,12 +635,20 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
   const [uploadProgress, setUploadProgress] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [sel, setSel] = useState(new Set());
+  const [sortBy, setSortBy] = useState("recent"); // recent, due, amount_desc, amount_asc, supplier
   const filtered = useMemo(() => {
     let list = invoices;
     if (filters.status !== "ALL") list = list.filter(i => i.status === filters.status);
     if (filters.search) { const t = filters.search.toLowerCase(); list = list.filter(i => { const s = getSup(suppliers, i.supplier_id); return s.name?.toLowerCase().includes(t) || s.alias?.toLowerCase().includes(t) || i.invoice_number.toLowerCase().includes(t); }); }
-    return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  }, [invoices, filters, suppliers]);
+    switch (sortBy) {
+      case "due": return [...list].sort((a, b) => new Date(a.due_date || "2099-12-31") - new Date(b.due_date || "2099-12-31"));
+      case "amount_desc": return [...list].sort((a, b) => b.total - a.total);
+      case "amount_asc": return [...list].sort((a, b) => a.total - b.total);
+      case "supplier": return [...list].sort((a, b) => (getSup(suppliers, a.supplier_id).alias || "").localeCompare(getSup(suppliers, b.supplier_id).alias || ""));
+      case "issue": return [...list].sort((a, b) => new Date(b.issue_date || 0) - new Date(a.issue_date || 0));
+      default: return [...list].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    }
+  }, [invoices, filters, suppliers, sortBy]);
 
   const toggleSel = (id, e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const toggleAll = () => setSel(sel.size === filtered.length ? new Set() : new Set(filtered.map(i => i.id)));
@@ -739,16 +747,26 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       ))}
     </div>
 
-    {filtered.length > 0 && <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-      <Btn variant="secondary" size="sm" onClick={toggleAll}>{sel.size === filtered.length ? "Deseleccionar" : `Seleccionar todo (${filtered.length})`}</Btn>
-      {sel.size > 0 && <>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#e85d04" }}>{sel.size} seleccionada(s)</span>
-        <Btn variant="success" size="sm" onClick={() => handleBatchAction("APPROVED")}>✅ Aprobar</Btn>
-        <Btn variant="primary" size="sm" onClick={() => handleBatchAction("EXTRACTED")}>✓ Extraída</Btn>
-        <Btn variant="danger" size="sm" onClick={() => handleBatchAction("REJECTED")}>✕ Rechazar</Btn>
-        <Btn variant="danger" size="sm" onClick={() => handleBatchAction("delete")}>🗑 Eliminar</Btn>
-      </>}
-    </div>}
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" }}>
+        {filtered.length > 0 && <Btn variant="secondary" size="sm" onClick={toggleAll}>{sel.size === filtered.length ? "Deseleccionar" : `Seleccionar todo (${filtered.length})`}</Btn>}
+        {sel.size > 0 && <>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#e85d04" }}>{sel.size} seleccionada(s)</span>
+          <Btn variant="success" size="sm" onClick={() => handleBatchAction("APPROVED")}>✅ Aprobar</Btn>
+          <Btn variant="primary" size="sm" onClick={() => handleBatchAction("EXTRACTED")}>✓ Extraída</Btn>
+          <Btn variant="danger" size="sm" onClick={() => handleBatchAction("REJECTED")}>✕ Rechazar</Btn>
+          <Btn variant="danger" size="sm" onClick={() => handleBatchAction("delete")}>🗑 Eliminar</Btn>
+        </>}
+      </div>
+      <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #e0e0e6", fontSize: 11, fontWeight: 600, color: "#6b7280", background: "#fff", cursor: "pointer", flexShrink: 0 }}>
+        <option value="recent">Más recientes</option>
+        <option value="due">Vencimiento ↑</option>
+        <option value="issue">Emisión ↓</option>
+        <option value="amount_desc">Monto ↓</option>
+        <option value="amount_asc">Monto ↑</option>
+        <option value="supplier">Proveedor A-Z</option>
+      </select>
+    </div>
 
     {filtered.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
@@ -769,7 +787,7 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
                 </div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 10 }}>
-                <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(inv.total)}</div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(inv.total, inv.currency)}</div>
                 <DueBadge d={inv.due_date} />
               </div>
             </div>
@@ -888,14 +906,14 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
     actions.push({ label: "Disputa", status: "DISPUTE", variant: "danger", icon: "⚡" });
     actions.push({ label: "Rechazar", status: "REJECTED", variant: "danger", icon: "✕" });
   }
-  if (inv.status === "APPROVED") actions.push({ label: "Programar", status: "SCHEDULED", variant: "primary", icon: "📅" });
+  if (inv.status === "APPROVED") actions.push({ label: "Pagada", status: "PAID", variant: "success", icon: "💰" });
   if (["APPROVED", "SCHEDULED"].includes(inv.status)) actions.push({ label: "Pagada", status: "PAID", variant: "success", icon: "💰" });
   if (inv.status === "DISPUTE") { actions.push({ label: "Aprobar", status: "APPROVED", variant: "success", icon: "✅" }); actions.push({ label: "Rechazar", status: "REJECTED", variant: "danger", icon: "✕" }); }
 
   const fields = [
     ["Proveedor", sup.name || "— Sin asignar —", "supplier_name"], ["RUT", sup.tax_id || "—", "tax_id"], ["N° Factura", inv.invoice_number, "invoice_number"],
     ["Emisión", fmtDateFull(inv.issue_date), "issue_date"], ["Vencimiento", fmtDateFull(inv.due_date), "due_date"],
-    ["Subtotal", fmt(inv.subtotal)], ["IVA", fmt(inv.tax_amount), "tax_amount"], ["Total", fmt(inv.total), "total"],
+    ["Subtotal", fmt(inv.subtotal, inv.currency)], ["IVA", fmt(inv.tax_amount, inv.currency), "tax_amount"], ["Total", fmt(inv.total, inv.currency), "total"],
   ];
 
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
@@ -909,7 +927,7 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
           <span style={{ fontSize: 10, color: "#8b8b9e", background: "#f7f7fa", padding: "2px 6px", borderRadius: 4 }}>📥 {inv.source}</span>
         </div>
       </div>
-      <div style={{ textAlign: "right" }}><div style={{ fontSize: mobile ? 22 : 26, fontWeight: 800 }}>{fmt(inv.total)}</div><DueBadge d={inv.due_date} /></div>
+      <div style={{ textAlign: "right" }}><div style={{ fontSize: mobile ? 22 : 26, fontWeight: 800 }}>{fmt(inv.total, inv.currency)}</div><DueBadge d={inv.due_date} /></div>
     </div>
 
     {actions.length > 0 && <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
@@ -1184,7 +1202,7 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
                 <div style={{ fontSize: 11, color: "#8b8b9e" }}>{!mobile && <>{sup.bank} · {sup.account_type} {sup.account_number} · </>}{inv.invoice_number}</div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 8 }}>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{fmt(inv.total)}</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{fmt(inv.total, inv.currency)}</div>
                 <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", marginTop: 2 }}><DueBadge d={inv.due_date} /><Badge status={inv.status} /></div>
               </div>
             </div>
@@ -1415,15 +1433,15 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDele
     setShowForm(false);
   };
 
-  return <div style={{ animation: "fadeIn 0.25s ease" }}>
+  return <div style={{ animation: "fadeIn 0.25s ease", overflow: "hidden", maxWidth: "100%" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Proveedores</h1>
       <Btn size={mobile ? "sm" : "md"} onClick={() => setShowForm(!showForm)}>+ Nuevo</Btn>
     </div>
 
-    {showForm && <Card style={{ marginBottom: 14, border: "2px solid #e85d04" }}>
+    {showForm && <Card style={{ marginBottom: 14, border: "2px solid #e85d04", overflow: "hidden" }}>
       <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Nuevo Proveedor</h3>
-      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 8, maxWidth: "100%" }}>
         <Input label="Razón Social *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
         <Input label="Nombre Corto" value={form.alias} onChange={e => setForm(f => ({ ...f, alias: e.target.value }))} />
         <Input label="RUT *" value={form.tax_id} onChange={e => setForm(f => ({ ...f, tax_id: e.target.value }))} placeholder="21.XXX.XXX.0001" />
@@ -1567,7 +1585,7 @@ function SupDetail({ sup, invs, suppliers, setSuppliers, onBack, onDelete, notif
       <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Facturas ({invs.length})</h3>
       {invs.map(inv => <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid #f5f5f8" }}>
         <div><span style={{ fontSize: 12 }}>{inv.invoice_number}</span><span style={{ fontSize: 11, color: "#8b8b9e", marginLeft: 6 }}>{fmtDate(inv.issue_date)}</span></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 13, fontWeight: 700 }}>{fmt(inv.total)}</span><Badge status={inv.status} /></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 13, fontWeight: 700 }}>{fmt(inv.total, inv.currency)}</span><Badge status={inv.status} /></div>
       </div>)}
       {invs.length === 0 && <div style={{ fontSize: 12, color: "#8b8b9e", textAlign: "center", padding: 12 }}>Sin facturas</div>}
     </Card>

@@ -159,6 +159,51 @@ export async function POST(request) {
       return NextResponse.json({ error: "Error procesando la factura con AI", raw: responseText }, { status: 500 });
     }
 
+    // ─── Post-extraction validation & corrections ────────
+    // Fix common OCR confusion: 6↔0 in years (2020 should be 2026, etc.)
+    const fixDate = (dateStr) => {
+      if (!dateStr) return dateStr;
+      const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return dateStr;
+      let year = parseInt(match[1]);
+      const currentYear = new Date().getFullYear();
+      // If year is suspiciously old (before 2023), try swapping 0↔6
+      if (year < currentYear - 2) {
+        const yearStr = String(year);
+        // Try replacing 0s with 6s in the year
+        const fixed = yearStr.replace(/0/g, '6');
+        const fixedYear = parseInt(fixed);
+        if (fixedYear >= currentYear - 1 && fixedYear <= currentYear + 1) {
+          year = fixedYear;
+        }
+        // Also try replacing 6s with 0s (less common but possible)
+        const fixed2 = yearStr.replace(/6/g, '0');
+        const fixedYear2 = parseInt(fixed2);
+        if (fixedYear2 >= currentYear - 1 && fixedYear2 <= currentYear + 1) {
+          year = fixedYear2;
+        }
+      }
+      // If year is in the far future, also try fix
+      if (year > currentYear + 2) {
+        const yearStr = String(year);
+        const fixed = yearStr.replace(/6/g, '0');
+        const fixedYear = parseInt(fixed);
+        if (fixedYear >= currentYear - 1 && fixedYear <= currentYear + 1) {
+          year = fixedYear;
+        }
+      }
+      return `${year}-${match[2]}-${match[3]}`;
+    };
+
+    if (extracted.issue_date) extracted.issue_date = fixDate(extracted.issue_date);
+    if (extracted.due_date) extracted.due_date = fixDate(extracted.due_date);
+
+    // If due_date is before issue_date, it's likely wrong — set to issue_date
+    if (extracted.issue_date && extracted.due_date && extracted.due_date < extracted.issue_date) {
+      extracted.due_date = extracted.issue_date;
+      if (extracted.confidence) extracted.confidence.due_date = 0.5;
+    }
+
     // ─── Match or create supplier by RUT ────────────────────
     let supplierId = null;
     let supplierMatched = false;
