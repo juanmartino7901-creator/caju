@@ -1468,17 +1468,17 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDele
       </>}
     </div>}
 
-    <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 8 }}>
+    <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: 8 }}>
       {filtered.map(sup => {
         const pending = invoices.filter(i => i.supplier_id === sup.id && !["PAID", "REJECTED"].includes(i.status)).reduce((s, i) => s + i.total, 0);
         const checked = sel.has(sup.id);
-        return <Card key={sup.id} hover onClick={() => nav("suppliers", sup.id)} style={{ borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
+        return <Card key={sup.id} hover onClick={() => nav("suppliers", sup.id)} style={{ borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
             <input type="checkbox" checked={checked} onChange={() => {}} onClick={(e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(sup.id) ? n.delete(sup.id) : n.add(sup.id); return n; }); }} style={{ accentColor: "#e85d04", width: 16, height: 16, flexShrink: 0, marginTop: 2, cursor: "pointer" }} />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flex: 1, minWidth: 0, gap: 8 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.name}</div>
-                <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 2 }}>{sup.alias} · {sup.tax_id}</div>
+                <div style={{ fontSize: 11, color: "#8b8b9e", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sup.alias} · {sup.tax_id}</div>
                 <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "#f7f7fa", color: "#6b7280" }}>{sup.category}</span>
                   {sup.bank && sup.bank !== "—" && <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "#fff3e8", color: "#e85d04" }}>🏦 {sup.bank}</span>}
