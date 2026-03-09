@@ -59,22 +59,18 @@ export async function POST(request) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
-    // User-scoped client (respects RLS — queries filtered by user_id)
-    const supabase = createUserClient(accessToken);
-
-    // Decode JWT to get user_id for explicit inserts.
-    // We can't use supabase.auth.getUser() because the server-side client
-    // has no session — it only passes the JWT via global headers to PostgREST.
-    // DEFAULT auth.uid() also doesn't work reliably in this context.
-    let userId;
-    try {
-      const payload = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64").toString());
-      userId = payload.sub;
-      if (!userId) throw new Error("No sub in JWT");
-    } catch (e) {
-      console.error("JWT decode error:", e);
-      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
+    // Use service client to verify the token and get user_id reliably.
+    // supabase.auth.getUser(jwt) validates against Supabase Auth and returns the user.
+    const { data: { user: authUser }, error: authErr } = await storageClient.auth.getUser(accessToken);
+    if (authErr || !authUser?.id) {
+      console.error("=== AUTH ERROR ===", authErr?.message, "user:", authUser);
+      return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
     }
+    const userId = authUser.id;
+    console.log("Authenticated user:", userId);
+
+    // User-scoped client for RLS-filtered queries
+    const supabase = createUserClient(accessToken);
 
     const formData = await request.formData();
     const file = formData.get("file");

@@ -47,17 +47,14 @@ export async function POST(request) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
-    const supabase = createUserClient(accessToken);
-
-    // Decode JWT to get user_id
-    let userId;
-    try {
-      const payload = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64").toString());
-      userId = payload.sub;
-      if (!userId) throw new Error("No sub in JWT");
-    } catch (e) {
-      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
+    // Verify token and get user_id via Supabase Auth
+    const { data: { user: authUser }, error: authErr } = await storageClient.auth.getUser(accessToken);
+    if (authErr || !authUser?.id) {
+      return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
     }
+    const userId = authUser.id;
+
+    const supabase = createUserClient(accessToken);
 
     const { invoice_id, file_path } = await request.json();
 
