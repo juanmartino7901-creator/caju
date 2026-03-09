@@ -3,7 +3,7 @@
 // Generates Itaú Link Empresa compatible payment files
 // ============================================================
 
-import { BANK_CODES } from './utils';
+import { BANK_CODES } from './utils.js';
 
 /**
  * Month codes for Itaú date format (DDMMMYY)

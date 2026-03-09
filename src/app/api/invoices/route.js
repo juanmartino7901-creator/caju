@@ -1,4 +1,4 @@
-import { createServiceClient, createUserClient } from "../../lib/supabase-server";
+import { createServiceClient, createUserClient } from "../../lib/supabase-server.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
