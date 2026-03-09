@@ -62,14 +62,19 @@ export async function POST(request) {
     // User-scoped client (respects RLS — queries filtered by user_id)
     const supabase = createUserClient(accessToken);
 
-    // Verify token and get user_id (needed for explicit inserts — DEFAULT auth.uid()
-    // may not work reliably with server-side clients)
-    const { data: { user: authUser }, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !authUser) {
-      console.error("Auth error:", authErr);
-      return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
+    // Decode JWT to get user_id for explicit inserts.
+    // We can't use supabase.auth.getUser() because the server-side client
+    // has no session — it only passes the JWT via global headers to PostgREST.
+    // DEFAULT auth.uid() also doesn't work reliably in this context.
+    let userId;
+    try {
+      const payload = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64").toString());
+      userId = payload.sub;
+      if (!userId) throw new Error("No sub in JWT");
+    } catch (e) {
+      console.error("JWT decode error:", e);
+      return NextResponse.json({ error: "Token inválido" }, { status: 401 });
     }
-    const userId = authUser.id;
 
     const formData = await request.formData();
     const file = formData.get("file");

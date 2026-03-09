@@ -25,7 +25,15 @@ export function createUserClient(accessToken) {
       global: {
         headers: { Authorization: `Bearer ${accessToken}` },
       },
-      auth: { persistSession: false },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      // Critical: this makes _getAccessToken() return the user's JWT
+      // instead of the anon key, so PostgREST sets auth.uid() correctly
+      // for RLS policies and DEFAULT values.
+      accessToken: async () => accessToken,
     }
   );
 }
