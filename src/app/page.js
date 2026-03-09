@@ -682,9 +682,14 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       const file = valid[i];
       setUploadProgress(`Procesando ${i + 1} de ${valid.length}: ${file.name}`);
       try {
+        const { data: { session } } = await supabase.auth.getSession();
         const formData = new FormData();
         formData.append("file", file);
-        const res = await fetch("/api/invoices", { method: "POST", body: formData });
+        const res = await fetch("/api/invoices", {
+          method: "POST",
+          body: formData,
+          headers: { Authorization: `Bearer ${session?.access_token}` },
+        });
         const data = await res.json();
         if (!res.ok) {
           if (res.status === 409) notify(`${file.name}: ya fue subida`, "error");
