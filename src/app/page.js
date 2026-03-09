@@ -334,7 +334,7 @@ export default function Home() {
   useEffect(() => { if (user) fetchData(); else setLoading(false); }, [fetchData, user]);
 
   // ─── Notification & Nav (unchanged) ──────────────────────
-  const notify = useCallback((msg, type = "success") => { setNotification({ msg, type }); setTimeout(() => setNotification(null), 2500); }, []);
+  const notify = useCallback((msg, type = "success", linkId = null) => { setNotification({ msg, type, linkId }); setTimeout(() => setNotification(null), type === "error" ? 5000 : type === "supplier_created" ? 6000 : 2500); }, []);
   const nav = useCallback((v, id = null) => { setView(v); setSelectedId(id); }, []);
 
   // ─── Update invoice: write to Supabase then update local state ───
@@ -558,7 +558,7 @@ export default function Home() {
           </div>
         </div>}
 
-        {notification && <div style={{ position: "fixed", top: mobile ? 8 : 14, right: mobile ? 8 : 14, left: mobile ? 8 : "auto", zIndex: 999, padding: "10px 16px", borderRadius: 10, background: notification.type === "success" ? "#059669" : "#ef4444", color: "#fff", fontSize: 13, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", textAlign: "center" }}>{notification.msg}</div>}
+        {notification && <div onClick={() => { if (notification.linkId && notification.type === "supplier_created") { nav("suppliers", notification.linkId); setNotification(null); } }} style={{ position: "fixed", top: mobile ? 8 : 14, right: mobile ? 8 : 14, left: mobile ? 8 : "auto", zIndex: 999, padding: "10px 16px", borderRadius: 10, background: notification.type === "success" || notification.type === "supplier_created" ? "#059669" : "#ef4444", color: "#fff", fontSize: 13, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", textAlign: "center", cursor: notification.linkId ? "pointer" : "default" }}>{notification.msg}</div>}
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
         {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} />}
@@ -693,6 +693,7 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
 
     setUploading(true);
     let ok = 0, fail = 0;
+    const createdSuppliers = [];
     for (let i = 0; i < valid.length; i++) {
       const file = valid[i];
       setUploadProgress(`Procesando ${i + 1} de ${valid.length}: ${file.name}`);
@@ -707,6 +708,9 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
           fail++;
         } else {
           ok++;
+          if (data.supplier_created && data.supplier_name) {
+            createdSuppliers.push({ name: data.supplier_name, id: data.supplier_id });
+          }
         }
       } catch (err) {
         console.error("Upload error:", err);
@@ -720,6 +724,9 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
     if (ok > 0) {
       notify(`✅ ${ok} factura(s) subida(s)${fail > 0 ? ` · ${fail} con error` : ""}`);
       if (onInvoiceUploaded) onInvoiceUploaded();
+      createdSuppliers.forEach(s => {
+        setTimeout(() => notify(`Proveedor "${s.name}" creado automáticamente — tocá para completar datos`, "supplier_created", s.id), 800);
+      });
     } else {
       notify(`Error subiendo ${fail} factura(s)`, "error");
     }
@@ -815,7 +822,16 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
         </div>
       </Card>;
     })}
-    {filtered.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>📭</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>Sin facturas</div></Card>}
+    {filtered.length === 0 && invoices.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}>
+      <div style={{ fontSize: 32, opacity: 0.2 }}>📭</div>
+      <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No tenés facturas todavía</div>
+      <Btn size="sm" style={{ marginTop: 12 }} onClick={() => setShowUpload(true)}>📤 Subir tu primera factura</Btn>
+    </Card>}
+    {filtered.length === 0 && invoices.length > 0 && <Card style={{ textAlign: "center", padding: 28 }}>
+      <div style={{ fontSize: 32, opacity: 0.2 }}>🔍</div>
+      <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No se encontraron facturas con estos filtros</div>
+      <Btn variant="secondary" size="sm" style={{ marginTop: 12 }} onClick={() => setFilters({ status: "ALL", search: "" })}>Limpiar filtros</Btn>
+    </Card>}
   </div>;
 }
 
@@ -1365,7 +1381,7 @@ function RecurringView({ recurring, setRecurring, suppliers, onDelete, notify, m
           <Input label="Tarjeta ****" value={form.card_last4} onChange={e => setForm(f => ({ ...f, card_last4: e.target.value }))} />
         </>}
       </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={save}>Guardar</Btn></div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={save} disabled={!form.name.trim() || !form.amount || Number(form.amount) <= 0} style={!form.name.trim() || !form.amount || Number(form.amount) <= 0 ? { opacity: 0.5, cursor: "not-allowed" } : {}}>Guardar</Btn></div>
     </Card>}
 
     {Object.entries(RECURRING_TYPES).map(([key, type]) => <div key={key} style={{ marginBottom: 16 }}>
@@ -1457,7 +1473,7 @@ function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDele
         <Select label="Cond. Pago" value={form.payment_terms} onChange={e => setForm(f => ({ ...f, payment_terms: e.target.value }))}><option>Contado</option><option>15 días</option><option>30 días</option><option>60 días</option><option>Mensual</option></Select>
         <Input label="Notas" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
       </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={saveSupplier}>Guardar</Btn></div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={saveSupplier} disabled={!form.name.trim() || !form.tax_id.trim()} style={!form.name.trim() || !form.tax_id.trim() ? { opacity: 0.5, cursor: "not-allowed" } : {}}>Guardar</Btn></div>
     </Card>}
 
     <input type="text" placeholder="🔍  Buscar proveedor, RUT..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none", marginBottom: 10 }} />

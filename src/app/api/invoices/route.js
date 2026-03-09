@@ -293,6 +293,7 @@ export async function POST(request) {
       supplier_matched: supplierMatched,
       supplier_created: supplierCreated,
       supplier_id: supplierId,
+      supplier_name: extracted.emisor_nombre || null,
     });
   } catch (err) {
     console.error("Invoice upload error:", err);
