@@ -1,15 +1,12 @@
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient, createUserClient } from "../../lib/supabase-server";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 
-// Server-side Supabase client (with service role for storage)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Service role client — only for storage uploads (needs elevated permissions)
+const storageClient = createServiceClient();
 
 // ─── Claude Vision extraction prompt ────────────────────────
 const EXTRACTION_PROMPT = `Sos un extractor de datos de facturas uruguayas (e-factura, CFE). Analizá esta imagen/documento y extraé los siguientes campos en formato JSON estricto.
@@ -55,6 +52,16 @@ Notas:
 
 export async function POST(request) {
   try {
+    // ─── Auth: extract user token ──────────────────────────
+    const authHeader = request.headers.get("authorization");
+    const accessToken = authHeader?.replace("Bearer ", "");
+    if (!accessToken) {
+      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    }
+
+    // User-scoped client (respects RLS — queries filtered by user_id)
+    const supabase = createUserClient(accessToken);
+
     const formData = await request.formData();
     const file = formData.get("file");
 
@@ -78,7 +85,7 @@ export async function POST(request) {
     const buffer = Buffer.from(bytes);
     const fileHash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
 
-    // Check for duplicate
+    // Check for duplicate (user-scoped: only checks this user's invoices)
     const { data: existing } = await supabase
       .from("invoices")
       .select("id")
@@ -89,11 +96,11 @@ export async function POST(request) {
       return NextResponse.json({ error: "Esta factura ya fue subida", duplicate_id: existing.id }, { status: 409 });
     }
 
-    // Upload to Supabase Storage
+    // Upload to Supabase Storage (uses service role for storage permissions)
     const ext = file.type === "application/pdf" ? "pdf" : file.type === "image/png" ? "png" : "jpg";
     const filePath = `invoices/${Date.now()}_${fileHash}.${ext}`;
 
-    const { error: uploadErr } = await supabase.storage
+    const { error: uploadErr } = await storageClient.storage
       .from("invoices")
       .upload(filePath, buffer, { contentType: file.type, upsert: false });
 
@@ -170,20 +177,17 @@ export async function POST(request) {
       // If year is suspiciously old (before 2023), try swapping 0↔6
       if (year < currentYear - 2) {
         const yearStr = String(year);
-        // Try replacing 0s with 6s in the year
         const fixed = yearStr.replace(/0/g, '6');
         const fixedYear = parseInt(fixed);
         if (fixedYear >= currentYear - 1 && fixedYear <= currentYear + 1) {
           year = fixedYear;
         }
-        // Also try replacing 6s with 0s (less common but possible)
         const fixed2 = yearStr.replace(/6/g, '0');
         const fixedYear2 = parseInt(fixed2);
         if (fixedYear2 >= currentYear - 1 && fixedYear2 <= currentYear + 1) {
           year = fixedYear2;
         }
       }
-      // If year is in the far future, also try fix
       if (year > currentYear + 2) {
         const yearStr = String(year);
         const fixed = yearStr.replace(/6/g, '0');
@@ -204,7 +208,7 @@ export async function POST(request) {
       if (extracted.confidence) extracted.confidence.due_date = 0.5;
     }
 
-    // ─── Match or create supplier by RUT ────────────────────
+    // ─── Match or create supplier by RUT (user-scoped) ───────
     let supplierId = null;
     let supplierMatched = false;
     let supplierCreated = false;
@@ -220,7 +224,7 @@ export async function POST(request) {
         supplierId = matchedSup.id;
         supplierMatched = true;
       } else {
-        // Auto-create supplier from invoice data
+        // Auto-create supplier (user_id set by DEFAULT auth.uid() via RLS)
         const newSupplier = {
           name: extracted.emisor_nombre || "Proveedor Desconocido",
           alias: (extracted.emisor_nombre || "").split(/\s+(S\.?A\.?S?|S\.?R\.?L|LTDA|S\.?A\.?)/i)[0].trim() || extracted.emisor_nombre || "Nuevo",
@@ -248,7 +252,7 @@ export async function POST(request) {
     const hasLowConfidence = extracted.confidence && Object.values(extracted.confidence).some((v) => v !== null && v < 0.8);
     const initialStatus = hasLowConfidence ? "REVIEW_REQUIRED" : "EXTRACTED";
 
-    // ─── Insert invoice into DB ─────────────────────────────
+    // ─── Insert invoice (user_id set by DEFAULT auth.uid() via RLS)
     const invoiceRow = {
       file_path: filePath,
       file_hash: fileHash,
