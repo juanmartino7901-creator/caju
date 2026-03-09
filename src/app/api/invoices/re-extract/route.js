@@ -2,8 +2,16 @@ import { createServiceClient, createUserClient } from "@/lib/supabase-server";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const storageClient = createServiceClient();
+let anthropic = null;
+let storageClient = null;
+function getAnthropic() {
+  if (!anthropic) anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return anthropic;
+}
+function getStorageClient() {
+  if (!storageClient) storageClient = createServiceClient();
+  return storageClient;
+}
 
 const EXTRACTION_PROMPT = `Sos un extractor de datos de facturas uruguayas (e-factura, CFE). Analizá esta imagen/documento y extraé los siguientes campos en formato JSON estricto.
 
@@ -34,10 +42,14 @@ Respondé SOLO con un JSON válido, sin texto antes ni después. Campos:
 }
 
 Notas:
-- Los montos son numéricos (no strings). Ej: 3235.01, no "3.235,01"
+- IMPORTANTE: Los montos SIEMPRE como números con punto decimal. Convertí formato uruguayo (punto=miles, coma=decimal) a formato JSON: "3.235,01" → 3235.01, "1.500" → 1500, "450,50" → 450.50
+- Si no hay un total explícito en el documento, sumá todos los line_items para calcular el total. Calculá subtotal = total - tax_amount
+- Si hay subtotal e IVA pero no total, calculá total = subtotal + tax_amount
+- Si solo hay un monto total, usá ese como total y estimá subtotal e IVA (22% en Uruguay)
 - Si un campo no es legible, poné null y confidence 0.0
 - Si dice CONTADO y no hay fecha de vencimiento, due_date = issue_date
-- El RUT uruguayo tiene 12 dígitos`;
+- El RUT uruguayo tiene 12 dígitos
+- NUNCA devuelvas 0 para total si hay montos visibles en el documento`;
 
 export async function POST(request) {
   try {
@@ -48,7 +60,7 @@ export async function POST(request) {
     }
 
     // Verify token and get user_id via Supabase Auth
-    const { data: { user: authUser }, error: authErr } = await storageClient.auth.getUser(accessToken);
+    const { data: { user: authUser }, error: authErr } = await getStorageClient().auth.getUser(accessToken);
     if (authErr || !authUser?.id) {
       return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
     }
@@ -74,7 +86,7 @@ export async function POST(request) {
     }
 
     // Download file from storage
-    const { data: fileData, error: dlErr } = await storageClient.storage
+    const { data: fileData, error: dlErr } = await getStorageClient().storage
       .from("invoices")
       .download(file_path);
 
@@ -96,9 +108,9 @@ export async function POST(request) {
     }
     content.push({ type: "text", text: EXTRACTION_PROMPT });
 
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
+      max_tokens: 4096,
       messages: [{ role: "user", content }],
     });
 
@@ -113,6 +125,37 @@ export async function POST(request) {
       return NextResponse.json({ error: "Error procesando re-extracción" }, { status: 500 });
     }
 
+    // Parse amounts (handle Uruguayan format strings)
+    const parseAmount = (val) => {
+      if (val === null || val === undefined) return 0;
+      if (typeof val === 'number') return val;
+      let s = String(val).trim();
+      if (s.includes(',')) {
+        s = s.replace(/\./g, '').replace(',', '.');
+      }
+      const n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
+    };
+
+    extracted.subtotal = parseAmount(extracted.subtotal);
+    extracted.tax_amount = parseAmount(extracted.tax_amount);
+    extracted.total = parseAmount(extracted.total);
+
+    if (extracted.total === 0 && Array.isArray(extracted.line_items) && extracted.line_items.length > 0) {
+      extracted.total = extracted.line_items.reduce((sum, item) => sum + parseAmount(item.amount), 0);
+    }
+    if (extracted.total === 0 && extracted.subtotal > 0) {
+      extracted.total = extracted.subtotal + extracted.tax_amount;
+    }
+    if (extracted.subtotal === 0 && extracted.total > 0) {
+      if (extracted.tax_amount > 0) {
+        extracted.subtotal = extracted.total - extracted.tax_amount;
+      } else {
+        extracted.subtotal = Math.round((extracted.total / 1.22) * 100) / 100;
+        extracted.tax_amount = Math.round((extracted.total - extracted.subtotal) * 100) / 100;
+      }
+    }
+
     // Update the invoice with new extraction data
     const hasLowConfidence = extracted.confidence && Object.values(extracted.confidence).some(v => v !== null && v < 0.8);
 
@@ -122,9 +165,9 @@ export async function POST(request) {
       issue_date: extracted.issue_date || null,
       due_date: extracted.due_date || extracted.issue_date || null,
       currency: extracted.currency || "UYU",
-      subtotal: extracted.subtotal || 0,
-      tax_amount: extracted.tax_amount || 0,
-      total: extracted.total || 0,
+      subtotal: extracted.subtotal,
+      tax_amount: extracted.tax_amount,
+      total: extracted.total,
       confidence_scores: extracted.confidence || {},
       status: hasLowConfidence ? "REVIEW_REQUIRED" : "EXTRACTED",
       updated_at: new Date().toISOString(),

@@ -3,10 +3,18 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Lazy-initialized clients (avoid module-level crashes on serverless)
+let anthropic = null;
+let storageClient = null;
 
-// Service role client — only for storage uploads (needs elevated permissions)
-const storageClient = createServiceClient();
+function getAnthropic() {
+  if (!anthropic) anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return anthropic;
+}
+function getStorageClient() {
+  if (!storageClient) storageClient = createServiceClient();
+  return storageClient;
+}
 
 // ─── Claude Vision extraction prompt ────────────────────────
 const EXTRACTION_PROMPT = `Sos un extractor de datos de facturas uruguayas (e-factura, CFE). Analizá esta imagen/documento y extraé los siguientes campos en formato JSON estricto.
@@ -44,11 +52,15 @@ Respondé SOLO con un JSON válido, sin texto antes ni después. Campos:
 }
 
 Notas:
-- Los montos son numéricos (no strings). Ej: 3235.01, no "3.235,01"
+- IMPORTANTE: Los montos SIEMPRE como números con punto decimal. Convertí formato uruguayo (punto=miles, coma=decimal) a formato JSON: "3.235,01" → 3235.01, "1.500" → 1500, "450,50" → 450.50
+- Si no hay un total explícito en el documento, sumá todos los line_items para calcular el total. Calculá subtotal = total - tax_amount
+- Si hay subtotal e IVA pero no total, calculá total = subtotal + tax_amount
+- Si solo hay un monto total, usá ese como total y estimá subtotal e IVA (22% en Uruguay)
 - Si un campo no es legible, poné null y confidence 0.0
 - Si dice CONTADO y no hay fecha de vencimiento, due_date = issue_date
 - El RUT uruguayo tiene 12 dígitos
-- Separá monto exento y gravado si es posible para calcular subtotal`;
+- Separá monto exento y gravado si es posible para calcular subtotal
+- NUNCA devuelvas 0 para total si hay montos visibles en el documento`;
 
 export async function POST(request) {
   try {
@@ -61,7 +73,7 @@ export async function POST(request) {
 
     // Use service client to verify the token and get user_id reliably.
     // supabase.auth.getUser(jwt) validates against Supabase Auth and returns the user.
-    const { data: { user: authUser }, error: authErr } = await storageClient.auth.getUser(accessToken);
+    const { data: { user: authUser }, error: authErr } = await getStorageClient().auth.getUser(accessToken);
     if (authErr || !authUser?.id) {
       console.error("=== AUTH ERROR ===", authErr?.message, "user:", authUser);
       return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
@@ -110,7 +122,7 @@ export async function POST(request) {
     const ext = file.type === "application/pdf" ? "pdf" : file.type === "image/png" ? "png" : "jpg";
     const filePath = `invoices/${Date.now()}_${fileHash}.${ext}`;
 
-    const { error: uploadErr } = await storageClient.storage
+    const { error: uploadErr } = await getStorageClient().storage
       .from("invoices")
       .upload(filePath, buffer, { contentType: file.type, upsert: false });
 
@@ -153,9 +165,9 @@ export async function POST(request) {
 
     content.push({ type: "text", text: EXTRACTION_PROMPT });
 
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
+      max_tokens: 4096,
       messages: [{ role: "user", content }],
     });
 
@@ -174,6 +186,43 @@ export async function POST(request) {
     } catch (parseErr) {
       console.error("Parse error:", parseErr, "Response:", responseText);
       return NextResponse.json({ error: "Error procesando la factura con AI", raw: responseText }, { status: 500 });
+    }
+
+    // ─── Post-extraction: parse amounts (handle Uruguayan format) ────
+    const parseAmount = (val) => {
+      if (val === null || val === undefined) return 0;
+      if (typeof val === 'number') return val;
+      // String: Uruguayan format "3.235,01" → 3235.01
+      let s = String(val).trim();
+      if (s.includes(',')) {
+        // Has comma → treat as decimal separator, dots are thousands
+        s = s.replace(/\./g, '').replace(',', '.');
+      }
+      const n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
+    };
+
+    extracted.subtotal = parseAmount(extracted.subtotal);
+    extracted.tax_amount = parseAmount(extracted.tax_amount);
+    extracted.total = parseAmount(extracted.total);
+
+    // If total is 0 but we have line_items, sum them
+    if (extracted.total === 0 && Array.isArray(extracted.line_items) && extracted.line_items.length > 0) {
+      extracted.total = extracted.line_items.reduce((sum, item) => sum + parseAmount(item.amount), 0);
+    }
+    // If we have subtotal + tax but no total, calculate it
+    if (extracted.total === 0 && extracted.subtotal > 0) {
+      extracted.total = extracted.subtotal + extracted.tax_amount;
+    }
+    // If we have total but no subtotal, estimate from IVA
+    if (extracted.subtotal === 0 && extracted.total > 0) {
+      if (extracted.tax_amount > 0) {
+        extracted.subtotal = extracted.total - extracted.tax_amount;
+      } else {
+        // Estimate 22% IVA (Uruguay standard)
+        extracted.subtotal = Math.round((extracted.total / 1.22) * 100) / 100;
+        extracted.tax_amount = Math.round((extracted.total - extracted.subtotal) * 100) / 100;
+      }
     }
 
     // ─── Post-extraction validation & corrections ────────
@@ -298,7 +347,7 @@ export async function POST(request) {
       console.error("code:", insertErr.code);
       console.error("details:", insertErr.details);
       console.error("hint:", insertErr.hint);
-      console.error("invoiceRow:", JSON.stringify(invoiceRow, null, 2));
+      console.error("invoiceData:", JSON.stringify(invoiceData, null, 2));
       console.error("userId:", userId);
       return NextResponse.json({ error: "Error guardando factura", debug: { message: insertErr.message, code: insertErr.code, details: insertErr.details, hint: insertErr.hint } }, { status: 500 });
     }
