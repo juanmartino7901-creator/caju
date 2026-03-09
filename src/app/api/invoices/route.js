@@ -256,8 +256,8 @@ export async function POST(request) {
         if (!createErr && createdSup) {
           supplierId = createdSup.id;
           supplierCreated = true;
-        } else {
-          console.error("Error creating supplier:", createErr);
+        } else if (createErr) {
+          console.error("Error creating supplier:", createErr.message, createErr.code, createErr.details, createErr.hint);
         }
       }
     }
@@ -292,18 +292,25 @@ export async function POST(request) {
       .single();
 
     if (insertErr) {
-      console.error("Insert error:", insertErr.message, insertErr.code, insertErr.details, insertErr.hint);
-      return NextResponse.json({ error: "Error guardando factura", debug: { message: insertErr.message, code: insertErr.code } }, { status: 500 });
+      console.error("=== INVOICE INSERT ERROR ===");
+      console.error("message:", insertErr.message);
+      console.error("code:", insertErr.code);
+      console.error("details:", insertErr.details);
+      console.error("hint:", insertErr.hint);
+      console.error("invoiceRow:", JSON.stringify(invoiceRow, null, 2));
+      console.error("userId:", userId);
+      return NextResponse.json({ error: "Error guardando factura", debug: { message: insertErr.message, code: insertErr.code, details: insertErr.details, hint: insertErr.hint } }, { status: 500 });
     }
 
-    // Log event
-    await supabase.from("invoice_events").insert({
+    // Log event (non-blocking — don't fail the upload if event logging fails)
+    const { error: eventErr } = await supabase.from("invoice_events").insert({
       invoice_id: newInvoice.id,
       event_type: "created",
       from_status: null,
       to_status: initialStatus,
       notes: `Factura subida y extraída por AI — ${supplierMatched ? "Proveedor matcheado" : supplierCreated ? "Proveedor creado automáticamente" : "Sin proveedor"}`,
     });
+    if (eventErr) console.error("Event insert error:", eventErr.message, eventErr.code, eventErr.details);
 
     return NextResponse.json({
       success: true,
@@ -315,7 +322,10 @@ export async function POST(request) {
       supplier_name: extracted.emisor_nombre || null,
     });
   } catch (err) {
-    console.error("Invoice upload error:", err);
+    console.error("=== INVOICE UPLOAD UNHANDLED ERROR ===");
+    console.error("name:", err.name);
+    console.error("message:", err.message);
+    console.error("stack:", err.stack);
     return NextResponse.json({ error: err.message || "Error interno" }, { status: 500 });
   }
 }
