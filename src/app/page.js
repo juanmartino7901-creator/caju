@@ -11,6 +11,7 @@ import Payables from "@/components/Payables";
 import RecurringView from "@/components/RecurringView";
 import Suppliers from "@/components/Suppliers";
 import SupDetail from "@/components/SupplierDetail";
+import CashflowView from "@/components/CashflowView";
 
 // ─── Supabase Client ─────────────────────────────────────────
 const supabase = createClient(
@@ -402,6 +403,7 @@ export default function Home() {
     { key: "payables", label: "Pagos", icon: "💰", badge: stats.payable.length },
     { key: "recurring", label: "Fijos", icon: "🔄" },
     { key: "suppliers", label: "Proveedores", icon: "🏢" },
+    { key: "cashflow", label: "Cashflow", icon: "📈" },
   ];
 
   const BottomNav = () => <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #e8e8ec", display: "flex", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
@@ -456,6 +458,7 @@ export default function Home() {
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} supabase={supabase} />}
         {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} supabase={supabase} />}
         {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} categories={categories} supabase={supabase} />}
+        {view === "cashflow" && <CashflowView supabase={supabase} mobile={mobile} notify={notify} />}
       </main>
 
       {mobile && <BottomNav />}
