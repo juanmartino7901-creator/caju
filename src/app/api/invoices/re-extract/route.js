@@ -48,6 +48,12 @@ export async function POST(request) {
     }
 
     const supabase = createUserClient(accessToken);
+
+    const { data: { user: authUser }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !authUser) {
+      return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
+    }
+
     const { invoice_id, file_path } = await request.json();
 
     if (!invoice_id || !file_path) {

@@ -62,6 +62,15 @@ export async function POST(request) {
     // User-scoped client (respects RLS — queries filtered by user_id)
     const supabase = createUserClient(accessToken);
 
+    // Verify token and get user_id (needed for explicit inserts — DEFAULT auth.uid()
+    // may not work reliably with server-side clients)
+    const { data: { user: authUser }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !authUser) {
+      console.error("Auth error:", authErr);
+      return NextResponse.json({ error: "Token inválido o expirado" }, { status: 401 });
+    }
+    const userId = authUser.id;
+
     const formData = await request.formData();
     const file = formData.get("file");
 
@@ -224,13 +233,13 @@ export async function POST(request) {
         supplierId = matchedSup.id;
         supplierMatched = true;
       } else {
-        // Auto-create supplier (user_id set by DEFAULT auth.uid() via RLS)
         const newSupplier = {
           name: extracted.emisor_nombre || "Proveedor Desconocido",
           alias: (extracted.emisor_nombre || "").split(/\s+(S\.?A\.?S?|S\.?R\.?L|LTDA|S\.?A\.?)/i)[0].trim() || extracted.emisor_nombre || "Nuevo",
           tax_id: extracted.emisor_rut,
           category: "Servicios",
           payment_terms: extracted.payment_terms || "Contado",
+          user_id: userId,
         };
 
         const { data: createdSup, error: createErr } = await supabase
@@ -252,7 +261,7 @@ export async function POST(request) {
     const hasLowConfidence = extracted.confidence && Object.values(extracted.confidence).some((v) => v !== null && v < 0.8);
     const initialStatus = hasLowConfidence ? "REVIEW_REQUIRED" : "EXTRACTED";
 
-    // ─── Insert invoice (user_id set by DEFAULT auth.uid() via RLS)
+    // ─── Insert invoice with explicit user_id ─────────────
     const invoiceRow = {
       file_path: filePath,
       file_hash: fileHash,
@@ -268,6 +277,7 @@ export async function POST(request) {
       total: extracted.total || 0,
       confidence_scores: extracted.confidence || {},
       source: "upload",
+      user_id: userId,
     };
 
     const { data: newInvoice, error: insertErr } = await supabase
@@ -277,8 +287,8 @@ export async function POST(request) {
       .single();
 
     if (insertErr) {
-      console.error("Insert error:", insertErr);
-      return NextResponse.json({ error: "Error guardando factura" }, { status: 500 });
+      console.error("Insert error:", insertErr.message, insertErr.code, insertErr.details, insertErr.hint);
+      return NextResponse.json({ error: "Error guardando factura", debug: { message: insertErr.message, code: insertErr.code } }, { status: 500 });
     }
 
     // Log event
