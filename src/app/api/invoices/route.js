@@ -281,6 +281,13 @@ export async function POST(request) {
       user_id: userId,
     };
 
+    // Final safety check — if userId is somehow falsy, abort
+    if (!userId) {
+      console.error("=== CRITICAL: userId is falsy before insert ===", userId, typeof userId);
+      return NextResponse.json({ error: "Error interno: no se pudo determinar el usuario" }, { status: 500 });
+    }
+    console.log("=== INSERTING INVOICE ===", "user_id:", invoiceRow.user_id, "userId var:", userId, "match:", invoiceRow.user_id === userId);
+
     const { data: newInvoice, error: insertErr } = await supabase
       .from("invoices")
       .insert(invoiceRow)
