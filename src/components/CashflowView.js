@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Card, Btn, Input, Select } from "@/components/SharedUI";
 import { projectCashFlows, computeNPV, findBreakEvenMonth, findPeakDeficit, getAnnualSummary, getMonthlyExchangeRate } from "@/lib/cashflow-engine";
 import { formatCurrency, formatPercent, getMonthLabel } from "@/lib/cashflow-format";
@@ -122,14 +122,21 @@ export default function CashflowView({ supabase, mobile, notify }) {
   }, []);
 
   // ─── Save project data ────────────────────────────────
-  const saveData = useCallback(async (newData) => {
+  // Immediate local state update + debounced DB persistence
+  const saveTimerRef = useRef(null);
+  const saveData = useCallback((newData) => {
+    // Synchronous state update — triggers re-render + recalc immediately
     setData(newData);
-    if (!activeProject) return;
-    setSaving(true);
-    if (dbAvailable && !activeProject.id?.startsWith("local-")) {
-      await apiCall("PUT", { id: activeProject.id, name: newData.setup?.name || activeProject.name, data: newData });
-    }
-    setSaving(false);
+    // Debounced DB save (500ms) to avoid hammering API on every keystroke
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      if (!activeProject) return;
+      if (dbAvailable && !activeProject.id?.startsWith("local-")) {
+        setSaving(true);
+        await apiCall("PUT", { id: activeProject.id, name: newData.setup?.name || activeProject.name, data: newData });
+        setSaving(false);
+      }
+    }, 500);
   }, [activeProject, dbAvailable, apiCall]);
 
   // ─── Create new project ────────────────────────────────
