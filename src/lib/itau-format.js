@@ -3,20 +3,7 @@
 // Generates Itaú Link Empresa compatible payment files
 // ============================================================
 
-/**
- * Bank codes for Itaú upload format
- */
-export const BANK_CODES = {
-  'Itaú': '113',
-  'BROU': '  1',
-  'Santander': '137',
-  'Scotiabank': '128',
-  'BBVA': '153',
-  'HSBC': '157',
-  'Bandes': '110',
-  'Citibank': '205',
-  'Nación Argentina': '246',
-};
+import { BANK_CODES } from './utils';
 
 /**
  * Month codes for Itaú date format (DDMMMYY)

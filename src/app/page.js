@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { fmt, fmtDate as fmtDateShort, fmtDateFull, daysUntil, STATUSES, BANK_CODES } from "../lib/utils";
 
 // ============================================================
 // CAJÚ — Complete MVP — Mobile Responsive — Supabase Connected
@@ -11,21 +12,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
-
-const BANK_CODES = { "Itaú": "113", "BROU": "1", "Santander": "137", "Scotiabank": "128", "BBVA": "153", "HSBC": "157", "Bandes": "110", "Citibank": "205" };
-
-const STATUSES = {
-  NEW: { label: "Nueva", color: "#6366f1", bg: "#eef2ff", icon: "📥" },
-  EXTRACTING: { label: "Procesando", color: "#f59e0b", bg: "#fffbeb", icon: "⚙️" },
-  EXTRACTED: { label: "Extraída", color: "#3b82f6", bg: "#eff6ff", icon: "✓" },
-  REVIEW_REQUIRED: { label: "Revisión", color: "#f97316", bg: "#fff7ed", icon: "👁" },
-  APPROVED: { label: "Aprobada", color: "#10b981", bg: "#ecfdf5", icon: "✅" },
-  SCHEDULED: { label: "Programada", color: "#8b5cf6", bg: "#f5f3ff", icon: "📅" },
-  PAID: { label: "Pagada", color: "#059669", bg: "#d1fae5", icon: "💰" },
-  DISPUTE: { label: "Disputa", color: "#ef4444", bg: "#fef2f2", icon: "⚡" },
-  REJECTED: { label: "Rechazada", color: "#6b7280", bg: "#f3f4f6", icon: "✕" },
-  DUPLICATE: { label: "Duplicada", color: "#9ca3af", bg: "#f9fafb", icon: "📋" },
-};
 
 const RECURRING_TYPES = {
   fixed_cost: { label: "Costo Fijo", icon: "📋", color: "#6366f1" },
@@ -47,10 +33,7 @@ function useIsMobile() {
 }
 
 // Helpers
-const fmt = (n, c = "UYU") => n == null ? "—" : `${c === "USD" ? "US$" : "$"} ${Number(n).toLocaleString("es-UY", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-const fmtDate = (d) => d ? new Date(d + "T12:00:00").toLocaleDateString("es-UY", { day: "2-digit", month: "short" }) : "—";
-const fmtDateFull = (d) => d ? new Date(d + "T12:00:00").toLocaleDateString("es-UY", { day: "2-digit", month: "short", year: "numeric" }) : "—";
-const daysUntil = (d) => { if (!d) return null; const t = new Date(); t.setHours(0,0,0,0); return Math.ceil((new Date(d+"T12:00:00").setHours(0,0,0,0) - t) / 864e5); };
+const fmtDate = fmtDateShort;
 const getSup = (suppliers, id) => suppliers.find(s => s.id === id) || {};
 
 // ============================================================
