@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { fmt, fmtDate as fmtDateShort, fmtDateFull, daysUntil, STATUSES, BANK_CODES } from "../lib/utils";
+import { generateItauPaymentFile } from "../lib/itau-format";
 
 // ============================================================
 // CAJÚ — Complete MVP — Mobile Responsive — Supabase Connected
@@ -1089,33 +1090,17 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
   const generateItauTxt = () => {
     if (sel.size === 0) { notify("Seleccioná facturas", "error"); return; }
 
-    const MONTHS = { 0: "JAN", 1: "FEB", 2: "MAR", 3: "APR", 4: "MAY", 5: "JUN", 6: "JUL", 7: "AUG", 8: "SEP", 9: "OCT", 10: "NOV", 11: "DEC" };
     const DEBIT_ACCOUNT = process.env.NEXT_PUBLIC_ITAU_DEBIT_ACCOUNT || "1234567";
     const OFFICE_CODE = process.env.NEXT_PUBLIC_ITAU_OFFICE_CODE || "04";
 
-    const fmtItauDate = (dateStr) => {
-      const d = dateStr ? new Date(dateStr + "T12:00:00") : new Date();
-      const dd = String(d.getDate()).padStart(2, "0");
-      const mmm = MONTHS[d.getMonth()];
-      const yy = String(d.getFullYear()).slice(-2);
-      return dd + mmm + yy;
-    };
-
-    const fmtItauMonto = (amount) => {
-      const cents = Math.round(amount * 100);
-      return String(cents).padStart(15, "0");
-    };
-
-    const sanitize = (str) => (str || "").replace(/[ñÑ]/g, "#").replace(/[áÁ]/g, "a").replace(/[éÉ]/g, "e").replace(/[íÍ]/g, "i").replace(/[óÓ]/g, "o").replace(/[úÚüÜ]/g, "u").replace(/[^a-zA-Z0-9\/\?\:\(\)\.\,\'\+\s\-]/g, "");
-
     const selected = payable.filter(i => sel.has(i.id));
-    const lines = [];
-    let errors = [];
+    const errors = [];
 
+    // Build payments array for itau-format.js
+    const payments = [];
     selected.forEach(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
 
-      // Validate supplier has bank account
       if (!sup.account_number || sup.account_number === "—") {
         errors.push(`${sup.alias || sup.name}: sin cuenta bancaria`);
         return;
@@ -1124,48 +1109,43 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
         errors.push(`${sup.alias || sup.name}: sin banco asignado`);
         return;
       }
-
-      const bankCode = BANK_CODES[sup.bank];
-      if (!bankCode) {
+      if (!BANK_CODES[sup.bank]) {
         errors.push(`${sup.alias || sup.name}: banco "${sup.bank}" no reconocido`);
         return;
       }
 
-      // Build 97-position record (Diseño Clásico Pago Proveedores)
-      const acctDebit = DEBIT_ACCOUNT.padStart(7, "0");           // Pos 1-7: Cuenta a debitar
-      const aplicativo = "7777";                                    // Pos 8-11: Aplicativo pago proveedores
-      const tipoPago = "2";                                         // Pos 12: Tipo de pago (2 = Acreditación en Cuenta)
-      const filler1 = "       ";                                    // Pos 13-19: Filler 7 espacios
-      const referencia = sanitize(inv.invoice_number).padEnd(12).slice(0, 12); // Pos 20-31: Referencia
-      const filler2 = "                            ";               // Pos 32-59: Filler 28 espacios
-      const acctCredit = sup.account_number.replace(/\D/g, "").padStart(7, "0"); // Pos 60-66: Cuenta a acreditar
-      const moneda = inv.currency === "USD" ? "US.D" : "URGP";    // Pos 67-70: Moneda
-      const monto = fmtItauMonto(inv.total);                       // Pos 71-85: Monto
-      const fecha = fmtItauDate(inv.due_date || inv.issue_date);  // Pos 86-92: Fecha
-      const oficina = OFFICE_CODE.padStart(2, "0");                // Pos 93-94: Oficina
-      const destino = "PAP";                                        // Pos 95-97: Destino de fondos
-
-      const line = acctDebit + aplicativo + tipoPago + filler1 + referencia + filler2 + acctCredit + moneda + monto + fecha + oficina + destino;
-      lines.push(line);
+      payments.push({
+        supplier: {
+          bank_code: BANK_CODES[sup.bank],
+          bank_name: sup.bank,
+          account_number: sup.account_number.replace(/\D/g, ""),
+          account_type: sup.account_type,
+          name: sup.name,
+          alias: sup.alias,
+        },
+        currency: inv.currency || "UYU",
+        amount: inv.total,
+        payment_date: inv.due_date || inv.issue_date,
+        invoice_number: inv.invoice_number || "",
+      });
     });
 
     if (errors.length > 0) {
       notify(`⚠️ ${errors.length} factura(s) sin datos bancarios: ${errors[0]}`, "error");
-      if (lines.length === 0) return;
+      if (payments.length === 0) return;
     }
 
-    // Download the file
-    const content = lines.join("\r\n");
+    const { content, filename, summary } = generateItauPaymentFile(payments, DEBIT_ACCOUNT, OFFICE_CODE);
+
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
     a.href = url;
-    a.download = `pago_proveedores_${today}.txt`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
 
-    notify(`🏦 Archivo Itaú generado: ${lines.length} pago(s) por ${fmt(selTotal)}`);
+    notify(`🏦 Archivo Itaú generado: ${summary.total_payments} pago(s) por ${fmt(selTotal)}${summary.other_bank_transfers > 0 ? ` (${summary.other_bank_transfers} inter-bancario)` : ""}`);
   };
 
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
