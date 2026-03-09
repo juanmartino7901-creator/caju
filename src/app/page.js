@@ -485,6 +485,21 @@ export default function Home() {
     }
   }, [invoices, notify]);
 
+  // ─── Re-extract invoice via AI ─────────────────────────
+  const reExtractInvoice = useCallback(async (invoiceId, filePath) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch("/api/invoices/re-extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
+      body: JSON.stringify({ invoice_id: invoiceId, file_path: filePath }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Error re-extracting");
+    // Refresh data to get updated extraction
+    await fetchData();
+    return data;
+  }, [fetchData]);
+
   // ─── Auth / Loading / Error screens ────────────────────
   if (authLoading) return <LoadingScreen />;
   if (!user) return <LoginScreen onLogin={signInWithGoogle} />;
@@ -546,7 +561,7 @@ export default function Home() {
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
         {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} />}
-        {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} />}
+        {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} onReExtract={reExtractInvoice} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} />}
         {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} />}
@@ -633,17 +648,52 @@ function Dashboard({ stats, invoices, recurring, suppliers, nav, mobile }) {
 // ============================================================
 // INBOX
 // ============================================================
+const PAGE_SIZE = 25;
+
+const Pagination = ({ page, setPage, totalItems, label }) => {
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const start = totalItems === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const end = Math.min(page * PAGE_SIZE, totalItems);
+  return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", fontSize: 12, color: "#8b8b9e" }}>
+    <span style={{ fontWeight: 500 }}>Mostrando {start}-{end} de {totalItems}{label ? ` ${label}` : ""}</span>
+    {totalPages > 1 && <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #e0e0e6", background: page <= 1 ? "#f5f5f8" : "#fff", color: page <= 1 ? "#ccc" : "#1a1a2e", fontSize: 12, fontWeight: 600, cursor: page <= 1 ? "default" : "pointer" }}>← Anterior</button>
+      <span style={{ fontWeight: 600, color: "#1a1a2e", padding: "0 6px" }}>{page} / {totalPages}</span>
+      <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #e0e0e6", background: page >= totalPages ? "#f5f5f8" : "#fff", color: page >= totalPages ? "#ccc" : "#1a1a2e", fontSize: 12, fontWeight: 600, cursor: page >= totalPages ? "default" : "pointer" }}>Siguiente →</button>
+    </div>}
+  </div>;
+};
+
 function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, onInvoiceUploaded, onBatchUpdate, onBatchDelete }) {
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [sel, setSel] = useState(new Set());
-  const [sortBy, setSortBy] = useState("recent"); // recent, due, amount_desc, amount_asc, supplier
+  const [sortBy, setSortBy] = useState("recent");
+  const [page, setPage] = useState(1);
+  const [filterSupplier, setFilterSupplier] = useState("ALL");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [failedFile, setFailedFile] = useState(null); // For manual entry on extraction failure
+  const [manualForm, setManualForm] = useState({ invoice_number: "", issue_date: "", due_date: "", total: "", currency: "UYU", supplier_id: "" });
+
   const filtered = useMemo(() => {
     let list = invoices;
     if (filters.status !== "ALL") list = list.filter(i => i.status === filters.status);
-    if (filters.search) { const t = filters.search.toLowerCase(); list = list.filter(i => { const s = getSup(suppliers, i.supplier_id); return s.name?.toLowerCase().includes(t) || s.alias?.toLowerCase().includes(t) || i.invoice_number.toLowerCase().includes(t); }); }
+    if (filters.search) {
+      const t = filters.search.toLowerCase();
+      list = list.filter(i => {
+        const s = getSup(suppliers, i.supplier_id);
+        const matchText = s.name?.toLowerCase().includes(t) || s.alias?.toLowerCase().includes(t) || i.invoice_number.toLowerCase().includes(t);
+        const matchAmount = !isNaN(t.replace(/[$.,\s]/g, "")) && t.replace(/[$.,\s]/g, "").length > 0 && String(i.total).includes(t.replace(/[$.,\s]/g, ""));
+        return matchText || matchAmount;
+      });
+    }
+    if (filterSupplier !== "ALL") list = list.filter(i => i.supplier_id === filterSupplier);
+    if (filterDateFrom) list = list.filter(i => i.due_date >= filterDateFrom);
+    if (filterDateTo) list = list.filter(i => i.due_date <= filterDateTo);
     switch (sortBy) {
       case "due": return [...list].sort((a, b) => new Date(a.due_date || "2099-12-31") - new Date(b.due_date || "2099-12-31"));
       case "amount_desc": return [...list].sort((a, b) => b.total - a.total);
@@ -652,11 +702,19 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       case "issue": return [...list].sort((a, b) => new Date(b.issue_date || 0) - new Date(a.issue_date || 0));
       default: return [...list].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     }
-  }, [invoices, filters, suppliers, sortBy]);
+  }, [invoices, filters, suppliers, sortBy, filterSupplier, filterDateFrom, filterDateTo]);
+
+  const paged = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [filters.status, filters.search, filterSupplier, filterDateFrom, filterDateTo]);
+
+  const hasActiveFilters = filters.search || filters.status !== "ALL" || filterSupplier !== "ALL" || filterDateFrom || filterDateTo;
+  const resultLabel = hasActiveFilters ? "resultados" : "facturas";
 
   const toggleSel = (id, e) => { e.stopPropagation(); setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const toggleAll = () => setSel(sel.size === filtered.length ? new Set() : new Set(filtered.map(i => i.id)));
   const selIds = [...sel];
+  const clearAllFilters = () => { setFilters({ status: "ALL", search: "" }); setFilterSupplier("ALL"); setFilterDateFrom(""); setFilterDateTo(""); };
 
   const handleBatchAction = async (action) => {
     let ok;
@@ -693,7 +751,13 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
         const data = await res.json();
         if (!res.ok) {
           if (res.status === 409) notify(`${file.name}: ya fue subida`, "error");
-          else notify(`${file.name}: ${data.error || "error"}`, "error");
+          else {
+            notify(`${file.name}: ${data.error || "error"}`, "error");
+            // On AI extraction failure, offer manual entry
+            if (res.status === 500 && valid.length === 1) {
+              setFailedFile({ name: file.name, url: URL.createObjectURL(file), type: file.type });
+            }
+          }
           fail++;
         } else {
           ok++;
@@ -726,7 +790,10 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
 
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-      <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Inbox</h1>
+      <div>
+        <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Inbox</h1>
+        <span style={{ fontSize: 12, color: "#8b8b9e", fontWeight: 500 }}>{hasActiveFilters ? `${filtered.length} resultados para tu búsqueda` : `${invoices.length} facturas`}</span>
+      </div>
       <Btn size={mobile ? "sm" : "md"} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>📤 Subir</Btn>
     </div>
 
@@ -753,7 +820,84 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       </>}
     </Card>}
 
-    <input type="text" placeholder="🔍  Buscar proveedor, número..." value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none", marginBottom: 8 }} />
+    {/* Manual entry form when AI extraction fails */}
+    {failedFile && <Card style={{ marginBottom: 12, border: "2px solid #f59e0b", background: "#fffbeb" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div>
+          <h3 style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>⚠ Extracción fallida — Carga manual</h3>
+          <div style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>No se pudieron extraer datos de "{failedFile.name}". Completá los datos manualmente.</div>
+        </div>
+        <button onClick={() => { setFailedFile(null); setManualForm({ invoice_number: "", issue_date: "", due_date: "", total: "", currency: "UYU", supplier_id: "" }); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#92400e" }}>✕</button>
+      </div>
+      <div style={{ display: "flex", gap: 12, flexDirection: mobile ? "column" : "row" }}>
+        {/* Preview of the document */}
+        <div style={{ flexShrink: 0, width: mobile ? "100%" : 200, height: 160, borderRadius: 8, overflow: "hidden", border: "1px solid #e0e0e6", background: "#fff" }}>
+          {failedFile.type === "application/pdf"
+            ? <iframe src={failedFile.url} style={{ width: "100%", height: "100%", border: "none" }} title="Preview" />
+            : <img src={failedFile.url} alt="Preview" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+          }
+        </div>
+        <div style={{ flex: 1, display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 6 }}>
+          <Select label="Proveedor" value={manualForm.supplier_id} onChange={e => setManualForm(f => ({ ...f, supplier_id: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.alias || s.name}</option>)}
+          </Select>
+          <Input label="N° Factura" value={manualForm.invoice_number} onChange={e => setManualForm(f => ({ ...f, invoice_number: e.target.value }))} />
+          <Input label="Emisión" type="date" value={manualForm.issue_date} onChange={e => setManualForm(f => ({ ...f, issue_date: e.target.value }))} />
+          <Input label="Vencimiento" type="date" value={manualForm.due_date} onChange={e => setManualForm(f => ({ ...f, due_date: e.target.value }))} />
+          <Input label="Total" type="number" value={manualForm.total} onChange={e => setManualForm(f => ({ ...f, total: e.target.value }))} />
+          <Select label="Moneda" value={manualForm.currency} onChange={e => setManualForm(f => ({ ...f, currency: e.target.value }))}><option>UYU</option><option>USD</option></Select>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}>
+        <Btn variant="secondary" size="sm" onClick={() => { setFailedFile(null); setManualForm({ invoice_number: "", issue_date: "", due_date: "", total: "", currency: "UYU", supplier_id: "" }); }}>Cancelar</Btn>
+        <Btn size="sm" disabled={!manualForm.total} style={!manualForm.total ? { opacity: 0.5, cursor: "not-allowed" } : {}} onClick={async () => {
+          try {
+            const { data, error } = await supabase.from("invoices").insert({
+              invoice_number: manualForm.invoice_number || "—",
+              issue_date: manualForm.issue_date || null,
+              due_date: manualForm.due_date || null,
+              total: Number(manualForm.total),
+              subtotal: Math.round(Number(manualForm.total) / 1.22),
+              tax_amount: Number(manualForm.total) - Math.round(Number(manualForm.total) / 1.22),
+              currency: manualForm.currency,
+              supplier_id: manualForm.supplier_id || null,
+              status: "REVIEW_REQUIRED",
+              source: "manual",
+              confidence_scores: {},
+            }).select().single();
+            if (error) throw error;
+            notify("Factura cargada manualmente");
+            setFailedFile(null);
+            setManualForm({ invoice_number: "", issue_date: "", due_date: "", total: "", currency: "UYU", supplier_id: "" });
+            if (onInvoiceUploaded) onInvoiceUploaded();
+          } catch (err) {
+            notify("Error al guardar: " + (err.message || "error"), "error");
+          }
+        }}>💾 Guardar manualmente</Btn>
+      </div>
+    </Card>}
+
+    <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+      <input type="text" placeholder="🔍  Buscar proveedor, número, monto..." value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none" }} />
+      <button onClick={() => setShowFilters(!showFilters)} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${showFilters || hasActiveFilters ? "#e85d04" : "#e0e0e6"}`, background: showFilters ? "#fff8f3" : "#fff", color: showFilters || hasActiveFilters ? "#e85d04" : "#6b7280", fontSize: 14, cursor: "pointer", flexShrink: 0, fontWeight: 600 }} title="Filtros avanzados">
+        ⚙ {hasActiveFilters && filterSupplier !== "ALL" || filterDateFrom || filterDateTo ? "●" : ""}
+      </button>
+    </div>
+
+    {showFilters && <Card style={{ marginBottom: 8, padding: 12, border: "1px solid #e0e0e6" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr", gap: 8, alignItems: "end" }}>
+        <Select label="Proveedor" value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)}>
+          <option value="ALL">Todos</option>
+          {suppliers.map(s => <option key={s.id} value={s.id}>{s.alias || s.name}</option>)}
+        </Select>
+        <Input label="Fecha desde" type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} />
+        <Input label="Fecha hasta" type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} />
+      </div>
+      {(filterSupplier !== "ALL" || filterDateFrom || filterDateTo) && <div style={{ marginTop: 8, textAlign: "right" }}>
+        <Btn variant="ghost" size="sm" onClick={() => { setFilterSupplier("ALL"); setFilterDateFrom(""); setFilterDateTo(""); }}>Limpiar filtros avanzados</Btn>
+      </div>}
+    </Card>}
 
     <div style={{ display: "flex", gap: 5, marginBottom: 10, overflowX: "auto", paddingBottom: 4 }}>
       {["ALL", "NEW", "REVIEW_REQUIRED", "EXTRACTED", "APPROVED", "SCHEDULED", "PAID"].map(st => (
@@ -784,7 +928,9 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
       </select>
     </div>
 
-    {filtered.map(inv => {
+    <Pagination page={page} setPage={setPage} totalItems={filtered.length} label={resultLabel} />
+
+    {paged.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
       const checked = sel.has(inv.id);
       return <Card key={inv.id} hover onClick={() => nav("inbox", inv.id)} style={{ padding: mobile ? "12px 14px" : "10px 14px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff" }}>
@@ -811,6 +957,7 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
         </div>
       </Card>;
     })}
+    {filtered.length > PAGE_SIZE && <Pagination page={page} setPage={setPage} totalItems={filtered.length} label={resultLabel} />}
     {filtered.length === 0 && invoices.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}>
       <div style={{ fontSize: 32, opacity: 0.2 }}>📭</div>
       <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No tenés facturas todavía</div>
@@ -819,7 +966,7 @@ function Inbox({ invoices, suppliers, filters, setFilters, nav, notify, mobile, 
     {filtered.length === 0 && invoices.length > 0 && <Card style={{ textAlign: "center", padding: 28 }}>
       <div style={{ fontSize: 32, opacity: 0.2 }}>🔍</div>
       <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No se encontraron facturas con estos filtros</div>
-      <Btn variant="secondary" size="sm" style={{ marginTop: 12 }} onClick={() => setFilters({ status: "ALL", search: "" })}>Limpiar filtros</Btn>
+      <Btn variant="secondary" size="sm" style={{ marginTop: 12 }} onClick={clearAllFilters}>Limpiar filtros</Btn>
     </Card>}
   </div>;
 }
@@ -893,8 +1040,49 @@ function DocPreview({ inv }) {
 // ============================================================
 // INVOICE DETAIL
 // ============================================================
-function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mobile }) {
-  const [editing, setEditing] = useState(false);
+// Confidence badge with tooltip
+const ConfBadge = ({ value }) => {
+  const [showTip, setShowTip] = useState(false);
+  if (value == null) return null;
+  const pct = Math.round(value * 100);
+  const color = value >= 0.9 ? "#059669" : value >= 0.8 ? "#d97706" : "#dc2626";
+  const bg = value >= 0.9 ? "#d1fae5" : value >= 0.8 ? "#fef3c7" : "#fee2e2";
+  const icon = value >= 0.9 ? "✓" : value >= 0.8 ? "⚠" : "✗";
+  return <span
+    onMouseEnter={() => setShowTip(true)} onMouseLeave={() => setShowTip(false)}
+    style={{ position: "relative", fontSize: 9, fontWeight: 600, padding: "1px 5px", borderRadius: 3, background: bg, color, cursor: "help", display: "inline-flex", alignItems: "center", gap: 2 }}
+  >
+    {icon} {pct}%
+    {showTip && <span style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)", marginBottom: 4, padding: "4px 8px", borderRadius: 4, background: "#1a1a2e", color: "#fff", fontSize: 10, fontWeight: 500, whiteSpace: "nowrap", zIndex: 10 }}>Confianza: {pct}%</span>}
+  </span>;
+};
+
+// Extraction checklist summary
+const ExtractionChecklist = ({ inv, sup }) => {
+  const checks = [
+    { label: "Proveedor", ok: !!(sup.name && sup.name !== "— Sin asignar —"), conf: inv.confidence?.emisor_nombre || inv.confidence?.supplier_name },
+    { label: "Monto", ok: inv.total > 0, conf: inv.confidence?.total },
+    { label: "Fecha", ok: !!inv.issue_date, conf: inv.confidence?.issue_date },
+    { label: "Vto", ok: !!inv.due_date, conf: inv.confidence?.due_date },
+    { label: "RUT", ok: !!(sup.tax_id && sup.tax_id !== "—"), conf: inv.confidence?.emisor_rut || inv.confidence?.tax_id },
+    { label: "N° Factura", ok: inv.invoice_number && inv.invoice_number !== "—", conf: inv.confidence?.invoice_number },
+  ];
+  return <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+    {checks.map((c, i) => {
+      const status = !c.ok ? "miss" : c.conf != null && c.conf < 0.8 ? "warn" : "ok";
+      const color = status === "ok" ? "#059669" : status === "warn" ? "#d97706" : "#dc2626";
+      const bg = status === "ok" ? "#d1fae5" : status === "warn" ? "#fef3c7" : "#fee2e2";
+      const icon = status === "ok" ? "✓" : status === "warn" ? "⚠" : "✗";
+      return <span key={i} style={{ fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, color, background: bg, whiteSpace: "nowrap" }}>{c.label} {icon}</span>;
+    })}
+  </div>;
+};
+
+function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mobile, onReExtract }) {
+  // Auto-open editing if there are low confidence fields
+  const hasLowConf = inv.confidence && Object.values(inv.confidence).some(v => v != null && v < 0.8);
+  const [editing, setEditing] = useState(hasLowConf && ["REVIEW_REQUIRED", "EXTRACTED"].includes(inv.status));
+  const [reExtracting, setReExtracting] = useState(false);
   const [form, setForm] = useState({
     invoice_number: inv.invoice_number, issue_date: inv.issue_date || "", due_date: inv.due_date || "",
     subtotal: inv.subtotal, tax_amount: inv.tax_amount, total: inv.total, currency: inv.currency,
@@ -906,6 +1094,19 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
     onUpdate(inv.id, updates);
     setEditing(false);
     notify("Datos actualizados");
+  };
+
+  const handleReExtract = async () => {
+    if (!inv.file_path) { notify("Sin documento para re-extraer", "error"); return; }
+    setReExtracting(true);
+    try {
+      await onReExtract(inv.id, inv.file_path);
+      notify("Re-extracción completada");
+    } catch {
+      notify("Error al re-extraer", "error");
+    } finally {
+      setReExtracting(false);
+    }
   };
 
   const actions = [];
@@ -937,6 +1138,19 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
       <div style={{ textAlign: "right" }}><div style={{ fontSize: mobile ? 22 : 26, fontWeight: 800 }}>{fmt(inv.total, inv.currency)}</div><DueBadge d={inv.due_date} /></div>
     </div>
 
+    {/* Extraction checklist */}
+    <Card style={{ padding: 10, marginBottom: 10, background: "#fafafa" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#8b8b9e", marginBottom: 4 }}>Resumen Extracción</div>
+          <ExtractionChecklist inv={inv} sup={sup} />
+        </div>
+        {inv.file_path && <Btn variant="secondary" size="sm" onClick={handleReExtract} disabled={reExtracting}>
+          {reExtracting ? "⏳ Re-extrayendo..." : "🔄 Re-extraer"}
+        </Btn>}
+      </div>
+    </Card>
+
     {actions.length > 0 && <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
       {actions.map((a, i) => <Btn key={i} variant={a.variant} size={mobile ? "lg" : "md"} onClick={() => { if (confirm(`¿${a.label} esta factura?`)) onUpdate(inv.id, { status: a.status }); }} style={{ flex: mobile ? "1 1 auto" : undefined }}>{a.icon} {a.label}</Btn>)}
     </div>}
@@ -948,16 +1162,17 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
           <Btn variant={editing ? "primary" : "secondary"} size="sm" onClick={() => { if (editing) saveEdits(); else { setForm({ invoice_number: inv.invoice_number, issue_date: inv.issue_date || "", due_date: inv.due_date || "", subtotal: inv.subtotal, tax_amount: inv.tax_amount, total: inv.total, currency: inv.currency, supplier_id: inv.supplier_id || "" }); setEditing(true); } }}>{editing ? "💾 Guardar" : "✏️ Editar"}</Btn>
         </div>
         {editing ? <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {hasLowConf && <div style={{ padding: "6px 10px", background: "#fef3c7", borderRadius: 6, fontSize: 11, color: "#92400e", fontWeight: 500 }}>⚠ Algunos campos tienen baja confianza — revisalos antes de aprobar</div>}
           <Select label="Proveedor" value={form.supplier_id} onChange={e => setForm(f => ({ ...f, supplier_id: e.target.value }))}>
             <option value="">— Sin asignar —</option>
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.alias || s.name} ({s.tax_id})</option>)}
           </Select>
-          <Input label="N° Factura" value={form.invoice_number} onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))} />
-          <Input label="Emisión" type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} />
-          <Input label="Vencimiento" type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} />
+          <Input label="N° Factura" value={form.invoice_number} onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))} style={inv.confidence?.invoice_number != null && inv.confidence.invoice_number < 0.8 ? { borderColor: "#dc2626", background: "#fff5f5" } : {}} />
+          <Input label="Emisión" type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} style={inv.confidence?.issue_date != null && inv.confidence.issue_date < 0.8 ? { borderColor: "#dc2626", background: "#fff5f5" } : {}} />
+          <Input label="Vencimiento" type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} style={inv.confidence?.due_date != null && inv.confidence.due_date < 0.8 ? { borderColor: "#dc2626", background: "#fff5f5" } : {}} />
           <Input label="Subtotal" type="number" value={form.subtotal} onChange={e => setForm(f => ({ ...f, subtotal: e.target.value }))} />
-          <Input label="IVA" type="number" value={form.tax_amount} onChange={e => setForm(f => ({ ...f, tax_amount: e.target.value }))} />
-          <Input label="Total" type="number" value={form.total} onChange={e => setForm(f => ({ ...f, total: e.target.value }))} />
+          <Input label="IVA" type="number" value={form.tax_amount} onChange={e => setForm(f => ({ ...f, tax_amount: e.target.value }))} style={inv.confidence?.tax_amount != null && inv.confidence.tax_amount < 0.8 ? { borderColor: "#dc2626", background: "#fff5f5" } : {}} />
+          <Input label="Total" type="number" value={form.total} onChange={e => setForm(f => ({ ...f, total: e.target.value }))} style={inv.confidence?.total != null && inv.confidence.total < 0.8 ? { borderColor: "#dc2626", background: "#fff5f5" } : {}} />
           <Select label="Moneda" value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}><option>UYU</option><option>USD</option></Select>
           <Btn variant="secondary" size="sm" onClick={() => setEditing(false)}>Cancelar</Btn>
         </div> : <div>
@@ -966,7 +1181,7 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
               <span style={{ fontSize: 12, color: "#8b8b9e" }}>{label}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ fontSize: 13, fontWeight: 500 }}>{value}</span>
-                {key && inv.confidence[key] != null && <span style={{ fontSize: 9, fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: inv.confidence[key] >= 0.9 ? "#d1fae5" : inv.confidence[key] >= 0.8 ? "#fef3c7" : "#fee2e2", color: inv.confidence[key] >= 0.9 ? "#059669" : inv.confidence[key] >= 0.8 ? "#d97706" : "#dc2626" }}>{Math.round(inv.confidence[key] * 100)}%</span>}
+                <ConfBadge value={inv.confidence?.[key]} />
               </div>
             </div>
           ))}
@@ -1002,13 +1217,46 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
 // ============================================================
 function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notify, mobile }) {
   const [showHistory, setShowHistory] = useState(false);
-  const payable = invoices.filter(i => ["APPROVED", "SCHEDULED"].includes(i.status)).sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+  const [paySearch, setPaySearch] = useState("");
+  const [payFilterSupplier, setPayFilterSupplier] = useState("ALL");
+  const [payFilterDateFrom, setPayFilterDateFrom] = useState("");
+  const [payFilterDateTo, setPayFilterDateTo] = useState("");
+  const [payFilterAmountMin, setPayFilterAmountMin] = useState("");
+  const [payFilterAmountMax, setPayFilterAmountMax] = useState("");
+  const [showPayFilters, setShowPayFilters] = useState(false);
+  const [payPage, setPayPage] = useState(1);
+
+  const allPayable = invoices.filter(i => ["APPROVED", "SCHEDULED"].includes(i.status)).sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+
+  const payable = useMemo(() => {
+    let list = allPayable;
+    if (paySearch) {
+      const t = paySearch.toLowerCase();
+      list = list.filter(i => {
+        const s = getSup(suppliers, i.supplier_id);
+        const matchText = s.name?.toLowerCase().includes(t) || s.alias?.toLowerCase().includes(t) || i.invoice_number.toLowerCase().includes(t);
+        const matchAmount = !isNaN(t.replace(/[$.,\s]/g, "")) && t.replace(/[$.,\s]/g, "").length > 0 && String(i.total).includes(t.replace(/[$.,\s]/g, ""));
+        return matchText || matchAmount;
+      });
+    }
+    if (payFilterSupplier !== "ALL") list = list.filter(i => i.supplier_id === payFilterSupplier);
+    if (payFilterDateFrom) list = list.filter(i => i.due_date >= payFilterDateFrom);
+    if (payFilterDateTo) list = list.filter(i => i.due_date <= payFilterDateTo);
+    if (payFilterAmountMin) list = list.filter(i => i.total >= Number(payFilterAmountMin));
+    if (payFilterAmountMax) list = list.filter(i => i.total <= Number(payFilterAmountMax));
+    return list;
+  }, [allPayable, paySearch, payFilterSupplier, payFilterDateFrom, payFilterDateTo, payFilterAmountMin, payFilterAmountMax, suppliers]);
+
+  const pagedPayable = useMemo(() => payable.slice((payPage - 1) * PAGE_SIZE, payPage * PAGE_SIZE), [payable, payPage]);
+  useEffect(() => { setPayPage(1); }, [paySearch, payFilterSupplier, payFilterDateFrom, payFilterDateTo, payFilterAmountMin, payFilterAmountMax]);
+
   const paidInvoices = invoices.filter(i => i.status === "PAID").sort((a, b) => new Date(b.payment_date || b.created_at) - new Date(a.payment_date || a.created_at));
   const totalPay = payable.reduce((s, i) => s + i.total, 0);
   const totalPaid = paidInvoices.reduce((s, i) => s + i.total, 0);
   const monthlyFixed = recurring.filter(r => r.active).reduce((s, r) => s + r.amount, 0);
   const selTotal = payable.filter(i => sel.has(i.id)).reduce((s, i) => s + i.total, 0);
   const toggle = id => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const hasPayFilters = paySearch || payFilterSupplier !== "ALL" || payFilterDateFrom || payFilterDateTo || payFilterAmountMin || payFilterAmountMax;
 
   // Group paid invoices by month
   const paidByMonth = useMemo(() => {
@@ -1155,7 +1403,10 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
 
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-      <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Pagos</h1>
+      <div>
+        <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Pagos</h1>
+        <span style={{ fontSize: 12, color: "#8b8b9e", fontWeight: 500 }}>{hasPayFilters ? `${payable.length} resultados` : `${allPayable.length} facturas por pagar`}</span>
+      </div>
       <div style={{ display: "flex", gap: 6 }}>
         <Btn variant="secondary" size="sm" onClick={generateExcel}>📊 Excel</Btn>
         <Btn size="sm" onClick={generateItauTxt}>🏦 Itaú</Btn>
@@ -1170,12 +1421,37 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
       {sel.size > 0 && <Card style={{ padding: 12, border: "1px solid #e85d04" }}><div style={{ fontSize: 10, color: "#e85d04", fontWeight: 600, textTransform: "uppercase" }}>Selección</div><div style={{ fontSize: mobile ? 16 : 20, fontWeight: 800, marginTop: 3 }}>{fmt(selTotal)}</div></Card>}
     </div>
 
+    <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+      <input type="text" placeholder="🔍  Buscar proveedor, número, monto..." value={paySearch} onChange={e => setPaySearch(e.target.value)} style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none" }} />
+      <button onClick={() => setShowPayFilters(!showPayFilters)} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${showPayFilters || hasPayFilters ? "#e85d04" : "#e0e0e6"}`, background: showPayFilters ? "#fff8f3" : "#fff", color: showPayFilters || hasPayFilters ? "#e85d04" : "#6b7280", fontSize: 14, cursor: "pointer", flexShrink: 0, fontWeight: 600 }} title="Filtros avanzados">
+        ⚙ {hasPayFilters && payFilterSupplier !== "ALL" || payFilterDateFrom || payFilterDateTo || payFilterAmountMin || payFilterAmountMax ? "●" : ""}
+      </button>
+    </div>
+
+    {showPayFilters && <Card style={{ marginBottom: 8, padding: 12, border: "1px solid #e0e0e6" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr 1fr 1fr", gap: 8, alignItems: "end" }}>
+        <Select label="Proveedor" value={payFilterSupplier} onChange={e => setPayFilterSupplier(e.target.value)}>
+          <option value="ALL">Todos</option>
+          {suppliers.map(s => <option key={s.id} value={s.id}>{s.alias || s.name}</option>)}
+        </Select>
+        <Input label="Fecha desde" type="date" value={payFilterDateFrom} onChange={e => setPayFilterDateFrom(e.target.value)} />
+        <Input label="Fecha hasta" type="date" value={payFilterDateTo} onChange={e => setPayFilterDateTo(e.target.value)} />
+        <Input label="Monto mín" type="number" value={payFilterAmountMin} onChange={e => setPayFilterAmountMin(e.target.value)} placeholder="0" />
+        <Input label="Monto máx" type="number" value={payFilterAmountMax} onChange={e => setPayFilterAmountMax(e.target.value)} placeholder="999999" />
+      </div>
+      {hasPayFilters && <div style={{ marginTop: 8, textAlign: "right" }}>
+        <Btn variant="ghost" size="sm" onClick={() => { setPaySearch(""); setPayFilterSupplier("ALL"); setPayFilterDateFrom(""); setPayFilterDateTo(""); setPayFilterAmountMin(""); setPayFilterAmountMax(""); }}>Limpiar filtros</Btn>
+      </div>}
+    </Card>}
+
     <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
       <Btn variant="secondary" size="sm" onClick={() => setSel(sel.size === payable.length ? new Set() : new Set(payable.map(i => i.id)))}>{sel.size === payable.length ? "Deseleccionar" : "Seleccionar todo"}</Btn>
       {sel.size > 0 && <Btn variant="success" size="sm" onClick={() => { if (!confirm(`¿Marcar ${sel.size} factura(s) como pagadas?`)) return; sel.forEach(id => onUpdate(id, { status: "PAID" })); setSel(new Set()); }}>💰 Pagar {sel.size}</Btn>}
     </div>
 
-    {payable.map(inv => {
+    <Pagination page={payPage} setPage={setPayPage} totalItems={payable.length} label="por pagar" />
+
+    {pagedPayable.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
       const checked = sel.has(inv.id);
       return <Card key={inv.id} onClick={() => toggle(inv.id)} style={{ padding: "10px 12px", marginBottom: 5, borderLeft: checked ? "3px solid #e85d04" : "3px solid transparent", background: checked ? "#fff8f3" : "#fff", cursor: "pointer" }}>
@@ -1196,7 +1472,8 @@ function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notif
         </div>
       </Card>;
     })}
-    {payable.length === 0 && !showHistory && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>✅</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>Sin pagos pendientes</div></Card>}
+    {payable.length > PAGE_SIZE && <Pagination page={payPage} setPage={setPayPage} totalItems={payable.length} label="por pagar" />}
+    {payable.length === 0 && !showHistory && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>✅</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>{hasPayFilters ? "No se encontraron facturas con estos filtros" : "Sin pagos pendientes"}</div>{hasPayFilters && <Btn variant="secondary" size="sm" style={{ marginTop: 8 }} onClick={() => { setPaySearch(""); setPayFilterSupplier("ALL"); setPayFilterDateFrom(""); setPayFilterDateTo(""); setPayFilterAmountMin(""); setPayFilterAmountMax(""); }}>Limpiar filtros</Btn>}</Card>}
 
     {/* ─── Historial de Pagos ─────────────────────────────── */}
     <div style={{ marginTop: 20 }}>
