@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { fmt, fmtDate as fmtDateShort, fmtDateFull, daysUntil, STATUSES, BANK_CODES } from "../lib/utils.js";
-import { generateItauPaymentFile } from "../lib/itau-format.js";
+import { fmt, fmtDate as fmtDateShort, fmtDateFull, daysUntil, STATUSES, BANK_CODES } from "@/lib/utils";
+import { generateItauPaymentFile } from "@/lib/itau-format";
 
 // ============================================================
 // CAJÚ — Complete MVP — Mobile Responsive — Supabase Connected
