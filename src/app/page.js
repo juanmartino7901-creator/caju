@@ -175,6 +175,7 @@ export default function Home() {
   const [paySelection, setPaySelection] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [userRole, setUserRole] = useState(null);
   const [categories, setCategories] = useState(() => {
     if (typeof window !== "undefined") {
       try { const s = localStorage.getItem("caju_categories"); if (s) return JSON.parse(s); } catch {}
@@ -191,9 +192,19 @@ export default function Home() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setAuthLoading(false);
+      if (session?.user) {
+        supabase.from("profiles").select("role").eq("id", session.user.id).single()
+          .then(({ data }) => { if (data?.role) setUserRole(data.role); });
+      }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      if (session?.user) {
+        supabase.from("profiles").select("role").eq("id", session.user.id).single()
+          .then(({ data }) => { if (data?.role) setUserRole(data.role); });
+      } else {
+        setUserRole(null);
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -213,6 +224,8 @@ export default function Home() {
   const userName = user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Usuario";
   const userInitial = userName.charAt(0).toUpperCase();
   const userAvatar = user?.user_metadata?.avatar_url;
+  const ROLE_LABELS = { admin: "Admin", employee: "Empleado", viewer: "Visor" };
+  const userRoleLabel = ROLE_LABELS[userRole] || user?.email || "";
 
   // ─── Fetch from Supabase ─────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -331,6 +344,9 @@ export default function Home() {
       updates.payment_date = new Date().toISOString().split("T")[0];
     }
 
+    // Snapshot for rollback
+    const snapshot = invoices.find(inv => inv.id === id);
+
     // Optimistic update
     setInvoices(prev => prev.map(inv => inv.id === id ? {
       ...inv, ...updates,
@@ -365,9 +381,13 @@ export default function Home() {
       });
     } catch (err) {
       console.error("Cajú: Error updating invoice", err);
-      notify("Error al guardar cambio", "error");
+      // Rollback to snapshot
+      if (snapshot) {
+        setInvoices(prev => prev.map(inv => inv.id === id ? snapshot : inv));
+      }
+      notify("Error al guardar cambio — se revirtió", "error");
     }
-  }, [notify, userName]);
+  }, [notify, userName, invoices]);
 
   const stats = useMemo(() => {
     const pending = invoices.filter(i => ["EXTRACTED", "REVIEW_REQUIRED", "APPROVED", "SCHEDULED"].includes(i.status));
@@ -520,7 +540,7 @@ export default function Home() {
     </div>
     <div style={{ padding: "10px 14px", borderTop: "1px solid #2a2a4e", display: "flex", alignItems: "center", gap: 7 }}>
       {userAvatar ? <img src={userAvatar} alt="" style={{ width: 28, height: 28, borderRadius: 7 }} referrerPolicy="no-referrer" /> : <div style={{ width: 28, height: 28, borderRadius: 7, background: "#e85d04", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{userInitial}</div>}
-      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</div><div style={{ fontSize: 9, color: "#e85d04" }}>Admin</div></div>
+      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</div><div style={{ fontSize: 9, color: "#e85d04" }}>{userRoleLabel}</div></div>
       <button onClick={signOut} title="Cerrar sesión" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#8b8b9e", padding: 4 }}>⏻</button>
     </div>
   </nav>;
@@ -812,32 +832,15 @@ function DocPreview({ inv }) {
     setLoading(true);
     setError(false);
 
-    const storagePath = inv.file_path;
-
-    // Try public URL first, then fall back to signed URL
-    const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/invoices/${storagePath}`;
-
-    // Test if public URL works
-    fetch(publicUrl, { method: "HEAD" })
-      .then(res => {
-        if (res.ok) {
-          setUrl(publicUrl);
-          setLoading(false);
-        } else {
-          // Fall back to signed URL
-          return supabase.storage.from("invoices").createSignedUrl(storagePath, 3600);
-        }
-      })
-      .then(result => {
-        if (result?.data?.signedUrl) {
-          setUrl(result.data.signedUrl);
-          setLoading(false);
-        } else if (result?.error) {
-          throw result.error;
-        }
+    supabase.storage.from("invoices").createSignedUrl(inv.file_path, 3600)
+      .then(({ data, error: signErr }) => {
+        if (signErr || !data?.signedUrl) throw signErr || new Error("No signed URL");
+        setUrl(data.signedUrl);
       })
       .catch(() => {
         setError(true);
+      })
+      .finally(() => {
         setLoading(false);
       });
   }, [inv.file_path]);
@@ -906,7 +909,6 @@ function InvDetail({ inv, sup, suppliers, onBack, onUpdate, onDelete, notify, mo
     actions.push({ label: "Disputa", status: "DISPUTE", variant: "danger", icon: "⚡" });
     actions.push({ label: "Rechazar", status: "REJECTED", variant: "danger", icon: "✕" });
   }
-  if (inv.status === "APPROVED") actions.push({ label: "Pagada", status: "PAID", variant: "success", icon: "💰" });
   if (["APPROVED", "SCHEDULED"].includes(inv.status)) actions.push({ label: "Pagada", status: "PAID", variant: "success", icon: "💰" });
   if (inv.status === "DISPUTE") { actions.push({ label: "Aprobar", status: "APPROVED", variant: "success", icon: "✅" }); actions.push({ label: "Rechazar", status: "REJECTED", variant: "danger", icon: "✕" }); }
 
