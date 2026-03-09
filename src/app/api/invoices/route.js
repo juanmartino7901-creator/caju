@@ -262,35 +262,33 @@ export async function POST(request) {
     const hasLowConfidence = extracted.confidence && Object.values(extracted.confidence).some((v) => v !== null && v < 0.8);
     const initialStatus = hasLowConfidence ? "REVIEW_REQUIRED" : "EXTRACTED";
 
-    // ─── Insert invoice with explicit user_id ─────────────
-    const invoiceRow = {
-      file_path: filePath,
-      file_hash: fileHash,
-      status: initialStatus,
-      supplier_id: supplierId,
-      invoice_number: extracted.invoice_number || "—",
-      invoice_series: extracted.invoice_series || "A",
-      issue_date: extracted.issue_date || null,
-      due_date: extracted.due_date || extracted.issue_date || null,
-      currency: extracted.currency || "UYU",
-      subtotal: extracted.subtotal || 0,
-      tax_amount: extracted.tax_amount || 0,
-      total: extracted.total || 0,
-      confidence_scores: extracted.confidence || {},
-      source: "upload",
-      user_id: userId,
-    };
+    // ─── Build and insert invoice ──────────────────────────
+    const invoiceData = {};
+    invoiceData.file_path = filePath;
+    invoiceData.file_hash = fileHash;
+    invoiceData.status = initialStatus;
+    invoiceData.supplier_id = supplierId;
+    invoiceData.invoice_number = extracted.invoice_number || "—";
+    invoiceData.invoice_series = extracted.invoice_series || "A";
+    invoiceData.issue_date = extracted.issue_date || null;
+    invoiceData.due_date = extracted.due_date || extracted.issue_date || null;
+    invoiceData.currency = extracted.currency || "UYU";
+    invoiceData.subtotal = extracted.subtotal || 0;
+    invoiceData.tax_amount = extracted.tax_amount || 0;
+    invoiceData.total = extracted.total || 0;
+    invoiceData.confidence_scores = extracted.confidence || {};
+    invoiceData.source = "upload";
+    invoiceData.user_id = userId;
 
-    // Final safety check — if userId is somehow falsy, abort
-    if (!userId) {
-      console.error("=== CRITICAL: userId is falsy before insert ===", userId, typeof userId);
-      return NextResponse.json({ error: "Error interno: no se pudo determinar el usuario" }, { status: 500 });
+    console.log("=== PRE-INSERT v2 ===", "userId:", userId, "invoiceData.user_id:", invoiceData.user_id, "full:", JSON.stringify(invoiceData));
+
+    if (!invoiceData.user_id) {
+      return NextResponse.json({ error: "ABORT: user_id is null/undefined", userId, type: typeof userId }, { status: 500 });
     }
-    console.log("=== INSERTING INVOICE ===", "user_id:", invoiceRow.user_id, "userId var:", userId, "match:", invoiceRow.user_id === userId);
 
     const { data: newInvoice, error: insertErr } = await supabase
       .from("invoices")
-      .insert(invoiceRow)
+      .insert(invoiceData)
       .select()
       .single();
 
