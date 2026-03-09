@@ -195,9 +195,6 @@ export default function CashflowView({ supabase, mobile, notify }) {
 
   const currency = data?.setup?.currency || "UYU";
 
-  // ─── Loading ──────────────────────────────────────────
-  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8b8b9e" }}>Cargando proyecciones...</div>;
-
   // ─── Switch project ─────────────────────────────────────
   const switchProject = useCallback(async (id) => {
     const proj = projects.find(p => p.id === id);
@@ -209,6 +206,9 @@ export default function CashflowView({ supabase, mobile, notify }) {
       setData(proj.data);
     }
   }, [projects, dbAvailable, loadProject]);
+
+  // ─── Loading ──────────────────────────────────────────
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8b8b9e" }}>Cargando proyecciones...</div>;
 
   // ─── Project selector ──────────────────────────────────
   const ProjectBar = () => (
