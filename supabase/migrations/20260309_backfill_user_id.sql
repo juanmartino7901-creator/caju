@@ -10,11 +10,11 @@
 -- 4. After verifying, run the NOT NULL constraints from the migration
 -- ============================================================
 
--- Replace this with your actual user UUID:
+-- Replace this with your actual user UUID: 
 -- Example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
 DO $$
 DECLARE
-  target_user_id UUID := 'YOUR_USER_ID_HERE';
+  target_user_id UUID := 326b515a-2c46-4d83-ac2e-393b65ea9ec2;
 BEGIN
   -- Verify the user exists
   IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = target_user_id) THEN
