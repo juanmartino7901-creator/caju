@@ -45,24 +45,31 @@ export default function CashflowView({ supabase, mobile, notify }) {
   const [data, setData] = useState(null); // ProjectData
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dbAvailable, setDbAvailable] = useState(true);
+
+  // ─── API helper ────────────────────────────────────────
+  const apiCall = useCallback(async (method, body) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const opts = { method, headers: { Authorization: `Bearer ${session?.access_token}` } };
+      if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+      const res = await fetch("/api/cashflow" + (method === "DELETE" && body?.id ? `?id=${body.id}` : ""), opts);
+      const json = await res.json();
+      if (json.success) return json;
+      return null;
+    } catch { return null; }
+  }, [supabase]);
 
   // ─── Fetch projects ──────────────────────────────────
   const fetchProjects = useCallback(async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/cashflow", {
-        headers: { Authorization: `Bearer ${session?.access_token}` },
-      });
-      const json = await res.json();
-      if (json.success) {
-        setProjects(json.data || []);
-        return json.data || [];
-      }
-    } catch (err) {
-      console.error("Cajú: Error fetching cashflow projects", err);
+    const json = await apiCall("GET");
+    if (json) {
+      setProjects(json.data || []);
+      return json.data || [];
     }
+    setDbAvailable(false);
     return [];
-  }, [supabase]);
+  }, [apiCall]);
 
   // ─── Load full project ────────────────────────────────
   const loadProject = useCallback(async (id) => {
@@ -77,26 +84,26 @@ export default function CashflowView({ supabase, mobile, notify }) {
       setData(proj.data);
     } catch (err) {
       console.error("Cajú: Error loading project", err);
-      notify?.("Error al cargar proyecto", "error");
     }
-  }, [supabase, notify]);
-
-  // ─── Create sample project if none exist ──────────────
-  const createSampleProject = useCallback(async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/cashflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ name: SAMPLE_PROJECT.setup.name, data: SAMPLE_PROJECT }),
-      });
-      const json = await res.json();
-      if (json.success) return json.data;
-    } catch (err) {
-      console.error("Cajú: Error creating sample project", err);
-    }
-    return null;
   }, [supabase]);
+
+  // ─── Create project (DB or local) ─────────────────────
+  const createProjectWithData = useCallback(async (projectData) => {
+    const json = await apiCall("POST", { name: projectData.setup.name, data: projectData });
+    if (json?.data) {
+      setActiveProject(json.data);
+      setData(projectData);
+      await fetchProjects();
+      return json.data;
+    }
+    // Fallback: local-only project
+    const localProj = { id: `local-${uid()}`, name: projectData.setup.name, data: projectData, created_at: new Date().toISOString() };
+    setActiveProject(localProj);
+    setData(projectData);
+    setProjects(prev => [...prev, localProj]);
+    setDbAvailable(false);
+    return localProj;
+  }, [apiCall, fetchProjects]);
 
   // ─── Init ──────────────────────────────────────────────
   useEffect(() => {
@@ -104,34 +111,26 @@ export default function CashflowView({ supabase, mobile, notify }) {
       setLoading(true);
       let list = await fetchProjects();
       if (list.length === 0) {
-        const sample = await createSampleProject();
-        if (sample) list = [sample];
-      }
-      if (list.length > 0) {
+        // Auto-create sample project
+        await createProjectWithData(SAMPLE_PROJECT);
+      } else {
         await loadProject(list[0].id);
       }
       setLoading(false);
     })();
-  }, [fetchProjects, loadProject, createSampleProject]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Save project data ────────────────────────────────
   const saveData = useCallback(async (newData) => {
     setData(newData);
     if (!activeProject) return;
     setSaving(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      await fetch("/api/cashflow", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ id: activeProject.id, name: newData.setup?.name || activeProject.name, data: newData }),
-      });
-    } catch (err) {
-      console.error("Cajú: Error saving cashflow project", err);
-    } finally {
-      setSaving(false);
+    if (dbAvailable && !activeProject.id?.startsWith("local-")) {
+      await apiCall("PUT", { id: activeProject.id, name: newData.setup?.name || activeProject.name, data: newData });
     }
-  }, [activeProject, supabase]);
+    setSaving(false);
+  }, [activeProject, dbAvailable, apiCall]);
 
   // ─── Create new project ────────────────────────────────
   const createProject = useCallback(async () => {
@@ -140,42 +139,31 @@ export default function CashflowView({ supabase, mobile, notify }) {
       revenueStreams: [], variableCosts: [], fixedCosts: [], employees: [], capexItems: [], loans: [],
       initialCash: 0, taxAssumptions: { incomeTaxRate: 25, vatRate: 22, payrollTaxRate: 0 },
     };
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/cashflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ name: blank.setup.name, data: blank }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setActiveProject(json.data);
-        setData(blank);
-        await fetchProjects();
-        notify?.("Proyecto creado");
-      }
-    } catch (err) {
-      console.error("Cajú: Error creating project", err);
-    }
-  }, [supabase, fetchProjects, notify]);
+    await createProjectWithData(blank);
+    notify?.("Proyecto creado");
+  }, [createProjectWithData, notify]);
 
   // ─── Delete project ────────────────────────────────────
   const deleteProject = useCallback(async (id) => {
     if (!confirm("¿Eliminar este proyecto de cashflow?")) return;
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      await fetch(`/api/cashflow?id=${id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${session?.access_token}` },
-      });
-      const list = await fetchProjects();
-      if (list.length > 0) await loadProject(list[0].id);
-      else { setActiveProject(null); setData(null); }
-      notify?.("Proyecto eliminado");
-    } catch (err) {
-      console.error("Cajú: Error deleting project", err);
+    if (dbAvailable && !id.startsWith("local-")) {
+      await apiCall("DELETE", { id });
     }
-  }, [supabase, fetchProjects, loadProject, notify]);
+    const remaining = projects.filter(p => p.id !== id);
+    setProjects(remaining);
+    if (remaining.length > 0) {
+      if (dbAvailable && !remaining[0].id?.startsWith("local-")) {
+        await loadProject(remaining[0].id);
+      } else {
+        setActiveProject(remaining[0]);
+        setData(remaining[0].data);
+      }
+    } else {
+      setActiveProject(null);
+      setData(null);
+    }
+    notify?.("Proyecto eliminado");
+  }, [dbAvailable, apiCall, projects, loadProject, notify]);
 
   // ─── Compute projections ──────────────────────────────
   const projections = useMemo(() => {
@@ -203,15 +191,28 @@ export default function CashflowView({ supabase, mobile, notify }) {
   // ─── Loading ──────────────────────────────────────────
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8b8b9e" }}>Cargando proyecciones...</div>;
 
+  // ─── Switch project ─────────────────────────────────────
+  const switchProject = useCallback(async (id) => {
+    const proj = projects.find(p => p.id === id);
+    if (!proj) return;
+    if (dbAvailable && !id.startsWith("local-")) {
+      await loadProject(id);
+    } else if (proj.data) {
+      setActiveProject(proj);
+      setData(proj.data);
+    }
+  }, [projects, dbAvailable, loadProject]);
+
   // ─── Project selector ──────────────────────────────────
   const ProjectBar = () => (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-      <Select value={activeProject?.id || ""} onChange={async (e) => { await loadProject(e.target.value); }} style={{ maxWidth: 260, fontSize: 13 }}>
+      {projects.length > 0 && <Select value={activeProject?.id || ""} onChange={(e) => switchProject(e.target.value)} style={{ maxWidth: 260, fontSize: 13 }}>
         {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-      </Select>
+      </Select>}
       <Btn size="sm" onClick={createProject}>+ Nuevo</Btn>
       {activeProject && <Btn variant="danger" size="sm" onClick={() => deleteProject(activeProject.id)}>🗑</Btn>}
       {saving && <span style={{ fontSize: 11, color: "#8b8b9e" }}>Guardando...</span>}
+      {!dbAvailable && <span style={{ fontSize: 10, color: "#d97706", fontWeight: 500 }}>⚠ Modo local (ejecutá la migración SQL)</span>}
     </div>
   );
 
