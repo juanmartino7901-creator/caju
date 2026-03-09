@@ -17,6 +17,8 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
   const [payFilterAmountMax, setPayFilterAmountMax] = useState("");
   const [showPayFilters, setShowPayFilters] = useState(false);
   const [payPage, setPayPage] = useState(1);
+  const [reportFrom, setReportFrom] = useState("");
+  const [reportTo, setReportTo] = useState("");
 
   const allPayable = invoices.filter(i => ["APPROVED", "SCHEDULED"].includes(i.status)).sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
 
@@ -43,6 +45,12 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
   useEffect(() => { setPayPage(1); }, [paySearch, payFilterSupplier, payFilterDateFrom, payFilterDateTo, payFilterAmountMin, payFilterAmountMax]);
 
   const paidInvoices = invoices.filter(i => i.status === "PAID").sort((a, b) => new Date(b.payment_date || b.created_at) - new Date(a.payment_date || a.created_at));
+  const reportPaid = useMemo(() => {
+    let list = paidInvoices;
+    if (reportFrom) list = list.filter(i => (i.payment_date || i.created_at?.split("T")[0] || "") >= reportFrom);
+    if (reportTo) list = list.filter(i => (i.payment_date || i.created_at?.split("T")[0] || "") <= reportTo);
+    return list;
+  }, [paidInvoices, reportFrom, reportTo]);
   const totalPay = payable.reduce((s, i) => s + i.total, 0);
   const totalPaid = paidInvoices.reduce((s, i) => s + i.total, 0);
   const monthlyFixed = recurring.filter(r => r.active).reduce((s, r) => s + r.amount, 0);
@@ -145,6 +153,127 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     notify(`🏦 Archivo Itaú generado: ${summary.total_payments} pago(s) por ${fmt(selTotal)}${summary.other_bank_transfers > 0 ? ` (${summary.other_bank_transfers} inter-bancario)` : ""}`);
   };
 
+  // ─── Report: build rows from paid invoices ─────────────
+  const buildReportRows = () => reportPaid.map(inv => {
+    const sup = getSup(suppliers, inv.supplier_id);
+    return {
+      fecha_pago: inv.payment_date || inv.created_at?.split("T")[0] || "—",
+      proveedor: sup.alias || sup.name || "—",
+      nro_factura: inv.invoice_number || "—",
+      monto: inv.total,
+      moneda: inv.currency || "UYU",
+      estado: STATUSES[inv.status]?.label || inv.status,
+    };
+  });
+
+  const reportRangeLabel = () => {
+    if (reportFrom && reportTo) return `${reportFrom} a ${reportTo}`;
+    if (reportFrom) return `Desde ${reportFrom}`;
+    if (reportTo) return `Hasta ${reportTo}`;
+    return "Todo el historial";
+  };
+
+  const downloadReportExcel = async () => {
+    const rows = buildReportRows();
+    if (rows.length === 0) { notify("No hay pagos para exportar", "error"); return; }
+
+    if (!window.XLSX) {
+      const script = document.createElement("script");
+      script.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+      document.head.appendChild(script);
+      await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
+    }
+    const XLSX = window.XLSX;
+
+    const sheetRows = rows.map(r => ({
+      "Fecha de Pago": r.fecha_pago, "Proveedor": r.proveedor, "N° Factura": r.nro_factura,
+      "Monto": r.monto, "Moneda": r.moneda, "Estado": r.estado,
+    }));
+    sheetRows.push({ "Fecha de Pago": "", "Proveedor": "", "N° Factura": "TOTAL", "Monto": rows.reduce((s, r) => s + r.monto, 0), "Moneda": "", "Estado": "" });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(sheetRows);
+    ws["!cols"] = [{ wch: 14 }, { wch: 25 }, { wch: 18 }, { wch: 14 }, { wch: 8 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Reporte Pagos");
+
+    const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
+    XLSX.writeFile(wb, `reporte_pagos_${today}.xlsx`);
+    notify(`📊 Excel generado: ${rows.length} pagos — ${reportRangeLabel()}`);
+  };
+
+  const downloadReportPDF = async () => {
+    const rows = buildReportRows();
+    if (rows.length === 0) { notify("No hay pagos para exportar", "error"); return; }
+
+    if (!window.jspdf) {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js";
+      document.head.appendChild(script);
+      await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
+    }
+    if (!window.jspdf?.jsPDF?.API?.autoTable) {
+      const script2 = document.createElement("script");
+      script2.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js";
+      document.head.appendChild(script2);
+      await new Promise((resolve, reject) => { script2.onload = resolve; script2.onerror = reject; });
+    }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    // Header
+    doc.setFontSize(24);
+    doc.setTextColor(232, 93, 4); // #e85d04
+    doc.text("Cajú", 14, 20);
+    doc.setFontSize(9);
+    doc.setTextColor(139, 139, 158);
+    doc.text("GESTIÓN DE PAGOS", 14, 26);
+
+    doc.setFontSize(16);
+    doc.setTextColor(26, 26, 46);
+    doc.text("Reporte de Pagos", 14, 40);
+
+    doc.setFontSize(10);
+    doc.setTextColor(107, 114, 128);
+    doc.text(`Período: ${reportRangeLabel()}`, 14, 48);
+    doc.text(`Generado: ${new Date().toLocaleDateString("es-UY")}`, 14, 54);
+    doc.text(`Total: ${rows.length} pagos`, 14, 60);
+
+    // Separator
+    doc.setDrawColor(232, 93, 4);
+    doc.setLineWidth(0.5);
+    doc.line(14, 64, 196, 64);
+
+    // Table
+    const totalAmount = rows.reduce((s, r) => s + r.monto, 0);
+    const tableBody = rows.map(r => [r.fecha_pago, r.proveedor, r.nro_factura, fmt(r.monto, r.moneda), r.moneda]);
+    tableBody.push(["", "", "TOTAL", fmt(totalAmount), ""]);
+
+    doc.autoTable({
+      startY: 68,
+      head: [["Fecha Pago", "Proveedor", "N° Factura", "Monto", "Moneda"]],
+      body: tableBody,
+      theme: "grid",
+      headStyles: { fillColor: [26, 26, 46], textColor: [255, 255, 255], fontSize: 9, fontStyle: "bold" },
+      bodyStyles: { fontSize: 9 },
+      alternateRowStyles: { fillColor: [247, 247, 250] },
+      footStyles: { fillColor: [232, 93, 4], textColor: [255, 255, 255], fontStyle: "bold" },
+      styles: { cellPadding: 3 },
+      columnStyles: { 3: { halign: "right" }, 4: { halign: "center" } },
+      didParseCell: (data) => {
+        if (data.row.index === tableBody.length - 1 && data.section === "body") {
+          data.cell.styles.fillColor = [26, 26, 46];
+          data.cell.styles.textColor = [255, 255, 255];
+          data.cell.styles.fontStyle = "bold";
+        }
+      },
+    });
+
+    const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
+    doc.save(`reporte_pagos_${today}.pdf`);
+    notify(`📄 PDF generado: ${rows.length} pagos — ${reportRangeLabel()}`);
+  };
+
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
       <div>
@@ -220,13 +349,26 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     {payable.length === 0 && !showHistory && <Card style={{ textAlign: "center", padding: 28 }}><div style={{ fontSize: 32, opacity: 0.2 }}>✅</div><div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>{hasPayFilters ? "No se encontraron facturas con estos filtros" : "Sin pagos pendientes"}</div>{hasPayFilters && <Btn variant="secondary" size="sm" style={{ marginTop: 8 }} onClick={() => { setPaySearch(""); setPayFilterSupplier("ALL"); setPayFilterDateFrom(""); setPayFilterDateTo(""); setPayFilterAmountMin(""); setPayFilterAmountMax(""); }}>Limpiar filtros</Btn>}</Card>}
 
     <div style={{ marginTop: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <h2 style={{ fontSize: 16, fontWeight: 800, cursor: "pointer" }} onClick={() => setShowHistory(!showHistory)}>
           {showHistory ? "▾" : "▸"} Historial de Pagos
           <span style={{ fontSize: 12, fontWeight: 500, color: "#8b8b9e", marginLeft: 6 }}>({paidInvoices.length})</span>
         </h2>
         {showHistory && paidInvoices.length > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>Total: {fmt(totalPaid)}</span>}
       </div>
+
+      {showHistory && paidInvoices.length > 0 && <Card style={{ marginBottom: 12, padding: 12, border: "1px solid #d1fae5", background: "#f9fefb" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+          <Input label="Desde" type="date" value={reportFrom} onChange={e => setReportFrom(e.target.value)} style={{ maxWidth: 160 }} />
+          <Input label="Hasta" type="date" value={reportTo} onChange={e => setReportTo(e.target.value)} style={{ maxWidth: 160 }} />
+          <div style={{ display: "flex", gap: 6, alignItems: "center", paddingBottom: 1 }}>
+            <Btn variant="secondary" size="sm" onClick={downloadReportExcel}>📊 Excel</Btn>
+            <Btn variant="secondary" size="sm" onClick={downloadReportPDF}>📄 PDF</Btn>
+            {(reportFrom || reportTo) && <Btn variant="ghost" size="sm" onClick={() => { setReportFrom(""); setReportTo(""); }}>Limpiar</Btn>}
+          </div>
+          <span style={{ fontSize: 11, color: "#8b8b9e", paddingBottom: 4 }}>{reportPaid.length} pago(s) — {fmt(reportPaid.reduce((s, i) => s + i.total, 0))}</span>
+        </div>
+      </Card>}
 
       {showHistory && paidByMonth.map(([month, group]) => {
         const monthLabel = new Date(month + "-15").toLocaleDateString("es-UY", { month: "long", year: "numeric" }).replace(/^\w/, c => c.toUpperCase());
