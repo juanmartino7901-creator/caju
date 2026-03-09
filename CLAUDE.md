@@ -31,6 +31,7 @@ The entire UI lives in `src/app/page.js` — a single large "use client" compone
 
 ### API Routes
 - `src/app/api/invoices/route.js` — POST endpoint for invoice upload. Requires `Authorization: Bearer <access_token>` header. Uses user-scoped Supabase client (RLS) for all data queries; service role only for storage uploads. Handles: file validation, SHA-256 dedup, Claude Vision extraction, date correction, auto-creation of suppliers by RUT, invoice insertion.
+- `src/app/api/invoices/re-extract/route.js` — POST endpoint for re-extracting data from an existing invoice's document. Downloads file from storage, sends to Claude Vision, updates invoice fields and confidence scores. Used by the "Re-extraer" button in invoice detail.
 
 ### Library modules (`src/lib/`)
 - `utils.js` — **Single source of truth** for shared constants and helpers: `STATUSES` (with label, color, bg, icon), `BANK_CODES`, `fmt()`, `fmtDate()` (short), `fmtDateFull()` (with year), `daysUntil()`. Both `page.js` and `itau-format.js` import from here.
@@ -64,3 +65,17 @@ See `.env.local.example`. Key vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUP
 - DocPreview uses Supabase signed URLs directly (bucket is private)
 - API routes require `Authorization: Bearer <token>` — frontend gets token via `supabase.auth.getSession()`
 - Service role client is only for storage uploads; all data queries use user-scoped client with RLS
+
+### Pagination & Filters
+- `PAGE_SIZE = 25` — shared constant for both Inbox and Pagos views
+- `Pagination` component renders "Mostrando X-Y de Z" with Anterior/Siguiente buttons
+- Inbox filters: status (pill buttons), text search (supplier/number/amount), advanced filters (supplier dropdown, date range). Page resets to 1 on filter change.
+- Pagos filters: text search, supplier, date range, amount range (min/max). Same pagination pattern.
+- Filtered list → paginated via `useMemo` slice. `paged` / `pagedPayable` are what gets rendered.
+
+### AI Extraction UX
+- `ConfBadge` — Confidence indicator with tooltip: green ✓ (≥90%), yellow ⚠ (≥80%), red ✗ (<80%)
+- `ExtractionChecklist` — Quick summary strip: "Proveedor ✓ | Monto ✓ | Fecha ⚠ | RUT ✗"
+- Low confidence (<80%) auto-opens edit mode in `InvDetail`, with red-highlighted fields
+- "Re-extraer" button calls `/api/invoices/re-extract` then refreshes data via `fetchData()`
+- Failed uploads show document preview + manual entry form (inserted directly into Supabase with status REVIEW_REQUIRED)
