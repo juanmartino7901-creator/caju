@@ -185,12 +185,14 @@ export default function CashflowView({ supabase, mobile, notify }) {
 
   const kpis = useMemo(() => {
     if (!projections.length || !data) return {};
-    const last = projections[projections.length - 1];
-    const totalRev = projections.reduce((s, p) => s + p.totalRevenue, 0);
-    const npv = computeNPV(projections, data.setup.discountRate);
-    const peak = findPeakDeficit(projections);
-    const breakEven = findBreakEvenMonth(projections);
-    return { totalRev, finalCash: last.closingCash, npv, peak, breakEven };
+    try {
+      const last = projections[projections.length - 1];
+      const totalRev = projections.reduce((s, p) => s + p.totalRevenue, 0);
+      const npv = computeNPV(projections, data.setup.discountRate);
+      const peak = findPeakDeficit(projections);
+      const breakEven = findBreakEvenMonth(projections);
+      return { totalRev, finalCash: last.closingCash, npv, peak, breakEven };
+    } catch { return {}; }
   }, [projections, data]);
 
   const currency = data?.setup?.currency || "UYU";
@@ -207,11 +209,8 @@ export default function CashflowView({ supabase, mobile, notify }) {
     }
   }, [projects, dbAvailable, loadProject]);
 
-  // ─── Loading ──────────────────────────────────────────
-  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8b8b9e" }}>Cargando proyecciones...</div>;
-
-  // ─── Project selector ──────────────────────────────────
-  const ProjectBar = () => (
+  // ─── Shared JSX pieces ────────────────────────────────
+  const projectBar = (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
       {projects.length > 0 && <Select value={activeProject?.id || ""} onChange={(e) => switchProject(e.target.value)} style={{ maxWidth: 260, fontSize: 13 }}>
         {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -223,22 +222,11 @@ export default function CashflowView({ supabase, mobile, notify }) {
     </div>
   );
 
-  if (!data) return <div style={{ animation: "fadeIn 0.25s ease" }}>
-    <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800, marginBottom: 12 }}>Cashflow</h1>
-    <ProjectBar />
-    <Card style={{ textAlign: "center", padding: 40 }}>
-      <div style={{ fontSize: 40, marginBottom: 8 }}>📈</div>
-      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Sin proyectos</div>
-      <Btn onClick={createProject}>+ Crear Proyecto</Btn>
-    </Card>
-  </div>;
-
-  // ─── Tab bar ───────────────────────────────────────────
-  const TabBar = () => (
+  const tabBar = (
     <div style={{ display: "flex", gap: 2, marginBottom: 14, overflowX: "auto", paddingBottom: 2 }}>
       {TABS.map(t => (
         <button key={t.key} onClick={() => setTab(t.key)} style={{
-          padding: mobile ? "6px 10px" : "7px 14px", borderRadius: 8, border: "none", cursor: "pointer",
+          padding: mobile ? "6px 10px" : "7px 14px", borderRadius: 8, cursor: "pointer",
           background: tab === t.key ? "#e85d04" : "#fff", color: tab === t.key ? "#fff" : "#8b8b9e",
           fontSize: mobile ? 11 : 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all 0.15s",
           border: tab === t.key ? "none" : "1px solid #e8e8ec",
@@ -249,12 +237,26 @@ export default function CashflowView({ supabase, mobile, notify }) {
     </div>
   );
 
+  // ─── Early returns (all hooks already called above) ───
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8b8b9e" }}>Cargando proyecciones...</div>;
+
+  if (!data) return <div style={{ animation: "fadeIn 0.25s ease" }}>
+    <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800, marginBottom: 12 }}>Cashflow</h1>
+    {projectBar}
+    <Card style={{ textAlign: "center", padding: 40 }}>
+      <div style={{ fontSize: 40, marginBottom: 8 }}>📈</div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Sin proyectos</div>
+      <Btn onClick={createProject}>+ Crear Proyecto</Btn>
+    </Card>
+  </div>;
+
+  // ─── Main render ───────────────────────────────────────
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Cashflow</h1>
     </div>
-    <ProjectBar />
-    <TabBar />
+    {projectBar}
+    {tabBar}
 
     {tab === "resumen" && <ResumenTab projections={projections} annualData={annualData} kpis={kpis} currency={currency} data={data} mobile={mobile} />}
     {tab === "ingresos" && <IngresosTab data={data} saveData={saveData} projections={projections} currency={currency} mobile={mobile} />}
