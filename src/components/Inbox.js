@@ -200,11 +200,11 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
         </>}
       </div>
       <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #e0e0e6", fontSize: 11, fontWeight: 600, color: "#6b7280", background: "#fff", cursor: "pointer", flexShrink: 0 }}>
-        <option value="recent">M\u00e1s recientes</option>
-        <option value="due">Vencimiento \u2191</option>
-        <option value="issue">Emisi\u00f3n \u2193</option>
-        <option value="amount_desc">Monto \u2193</option>
-        <option value="amount_asc">Monto \u2191</option>
+        <option value="recent">Más recientes</option>
+        <option value="due">{"Vencimiento ↑"}</option>
+        <option value="issue">{"Emisión ↓"}</option>
+        <option value="amount_desc">{"Monto ↓"}</option>
+        <option value="amount_asc">{"Monto ↑"}</option>
         <option value="supplier">Proveedor A-Z</option>
       </select>
     </div>

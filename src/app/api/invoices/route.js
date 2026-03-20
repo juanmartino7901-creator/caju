@@ -284,43 +284,87 @@ export async function POST(request) {
       if (extracted.confidence) extracted.confidence.due_date = 0.5;
     }
 
-    // ─── Match or create supplier by RUT (user-scoped) ───────
+    // ─── Match or create supplier (RUT exact → name fuzzy → create) ──
+    const normalizeName = (name) => {
+      if (!name) return "";
+      return name
+        .toUpperCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // strip accents
+        .replace(/\b(S\.?A\.?S?|S\.?R\.?L\.?|LTDA\.?|S\.?A\.?|S\.?C\.?|SOCIEDAD ANONIMA|INC\.?|LLC\.?|LTD\.?)\b/g, "")
+        .replace(/[.\-,]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    };
+
+    const fuzzyNameMatch = (extractedName, existingName) => {
+      const a = normalizeName(extractedName);
+      const b = normalizeName(existingName);
+      if (!a || !b) return false;
+      return a.includes(b) || b.includes(a);
+    };
+
     let supplierId = null;
     let supplierMatched = false;
     let supplierCreated = false;
 
+    // Step 1: Match by RUT (exact)
     if (extracted.emisor_rut) {
-      const { data: matchedSup } = await supabase
+      const normalizedRut = extracted.emisor_rut.replace(/[\s.\-]/g, "");
+      const { data: allSuppliers } = await supabase
         .from("suppliers")
-        .select("id")
-        .eq("tax_id", extracted.emisor_rut)
-        .maybeSingle();
+        .select("id, tax_id, name");
 
-      if (matchedSup) {
-        supplierId = matchedSup.id;
-        supplierMatched = true;
-      } else {
-        const newSupplier = {
-          name: extracted.emisor_nombre || "Proveedor Desconocido",
-          alias: (extracted.emisor_nombre || "").split(/\s+(S\.?A\.?S?|S\.?R\.?L|LTDA|S\.?A\.?)/i)[0].trim() || extracted.emisor_nombre || "Nuevo",
-          tax_id: extracted.emisor_rut,
-          category: "Servicios",
-          payment_terms: extracted.payment_terms || "Contado",
-          user_id: userId,
-        };
-
-        const { data: createdSup, error: createErr } = await supabase
-          .from("suppliers")
-          .insert(newSupplier)
-          .select("id")
-          .single();
-
-        if (!createErr && createdSup) {
-          supplierId = createdSup.id;
-          supplierCreated = true;
-        } else if (createErr) {
-          console.error("Error creating supplier:", createErr.message, createErr.code, createErr.details, createErr.hint);
+      if (allSuppliers) {
+        const rutMatch = allSuppliers.find(s =>
+          s.tax_id && s.tax_id.replace(/[\s.\-]/g, "") === normalizedRut
+        );
+        if (rutMatch) {
+          supplierId = rutMatch.id;
+          supplierMatched = true;
+          console.log(`Supplier matched by RUT: ${normalizedRut} → ${rutMatch.id}`);
         }
+      }
+    }
+
+    // Step 2: Match by name (fuzzy) if no RUT match
+    if (!supplierId && extracted.emisor_nombre) {
+      const { data: allSuppliers } = supplierId ? { data: null } : await supabase
+        .from("suppliers")
+        .select("id, name");
+
+      if (allSuppliers) {
+        const nameMatch = allSuppliers.find(s => fuzzyNameMatch(extracted.emisor_nombre, s.name));
+        if (nameMatch) {
+          supplierId = nameMatch.id;
+          supplierMatched = true;
+          console.log(`Supplier matched by name: "${extracted.emisor_nombre}" ≈ "${nameMatch.name}" → ${nameMatch.id}`);
+        }
+      }
+    }
+
+    // Step 3: Create new supplier only if no match at all
+    if (!supplierId && (extracted.emisor_rut || extracted.emisor_nombre)) {
+      const newSupplier = {
+        name: extracted.emisor_nombre || "Proveedor Desconocido",
+        alias: (extracted.emisor_nombre || "").split(/\s+(S\.?A\.?S?|S\.?R\.?L|LTDA|S\.?A\.?)/i)[0].trim() || extracted.emisor_nombre || "Nuevo",
+        tax_id: extracted.emisor_rut || null,
+        category: "Servicios",
+        payment_terms: extracted.payment_terms || "Contado",
+        user_id: userId,
+      };
+
+      const { data: createdSup, error: createErr } = await supabase
+        .from("suppliers")
+        .insert(newSupplier)
+        .select("id")
+        .single();
+
+      if (!createErr && createdSup) {
+        supplierId = createdSup.id;
+        supplierCreated = true;
+        console.log(`New supplier created: "${newSupplier.name}" → ${createdSup.id}`);
+      } else if (createErr) {
+        console.error("Error creating supplier:", createErr.message, createErr.code, createErr.details, createErr.hint);
       }
     }
 
