@@ -451,7 +451,10 @@ export default function Home() {
         clearTimeout(timer);
         const data = await res.json();
         if (!res.ok) {
-          return { success: false, name: file.name, error: data.error || `Error ${res.status}` };
+          const errMsg = data.error || `Error ${res.status}`;
+          const debugMsg = data.debug?.message ? ` [${data.debug.message}]` : "";
+          console.error(`Upload failed: ${file.name}`, data.debug || data.error);
+          return { success: false, name: file.name, error: errMsg + debugMsg };
         }
         const result = { success: true, name: file.name };
         if (data.supplier_created) result.supplierCreated = data.supplier_name;

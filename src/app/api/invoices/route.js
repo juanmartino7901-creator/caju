@@ -436,6 +436,14 @@ export async function POST(request) {
     console.error("name:", err.name);
     console.error("message:", err.message);
     console.error("stack:", err.stack);
-    return NextResponse.json({ error: err.message || "Error interno" }, { status: 500 });
+    // Detect body size / payload too large errors
+    const isPayloadError = err.message?.includes("body") || err.message?.includes("size") || err.message?.includes("too large") || err.message?.includes("FUNCTION_PAYLOAD_TOO_LARGE");
+    return NextResponse.json({
+      error: isPayloadError ? "Archivo demasiado grande para procesar (máx ~4.5MB en Vercel)" : (err.message || "Error interno"),
+      debug: { name: err.name, message: err.message, stack: err.stack?.split("\n").slice(0, 5).join("\n") },
+    }, { status: 500 });
   }
 }
+
+// Increase timeout for file uploads with AI extraction (Vercel serverless)
+export const maxDuration = 60;
