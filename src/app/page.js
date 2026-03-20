@@ -13,11 +13,17 @@ import Suppliers from "@/components/Suppliers";
 import SupDetail from "@/components/SupplierDetail";
 import CashflowView from "@/components/CashflowView";
 
-// ─── Supabase Client ─────────────────────────────────────────
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+// ─── Supabase Client (lazy singleton — avoids build-time crash) ──
+let _supabase = null;
+function getSupabase() {
+  if (!_supabase) {
+    _supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    );
+  }
+  return _supabase;
+}
 
 const DEFAULT_CATEGORIES = ["Insumos", "Carnes", "Panificados", "Packaging", "Logística", "Servicios", "Alquiler", "Seguros", "Impuestos", "Suscripciones"];
 
@@ -114,18 +120,18 @@ export default function Home() {
 
   // ─── Auth ────────────────────────────────────────────────
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    getSupabase().auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setAuthLoading(false);
       if (session?.user) {
-        supabase.from("profiles").select("role").eq("id", session.user.id).single()
+        getSupabase().from("profiles").select("role").eq("id", session.user.id).single()
           .then(({ data }) => { if (data?.role) setUserRole(data.role); });
       }
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = getSupabase().auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        supabase.from("profiles").select("role").eq("id", session.user.id).single()
+        getSupabase().from("profiles").select("role").eq("id", session.user.id).single()
           .then(({ data }) => { if (data?.role) setUserRole(data.role); });
       } else {
         setUserRole(null);
@@ -135,14 +141,14 @@ export default function Home() {
   }, []);
 
   const signInWithGoogle = async () => {
-    await supabase.auth.signInWithOAuth({
+    await getSupabase().auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },
     });
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await getSupabase().auth.signOut();
     setUser(null);
   };
 
@@ -157,7 +163,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const { data: supData, error: supErr } = await supabase.from("suppliers").select("*").order("name");
+      const { data: supData, error: supErr } = await getSupabase().from("suppliers").select("*").order("name");
       if (supErr) throw supErr;
 
       const { data: invData, error: invErr } = await supabase
@@ -166,7 +172,7 @@ export default function Home() {
         .order("due_date", { ascending: true });
       if (invErr) throw invErr;
 
-      const { data: recData, error: recErr } = await supabase.from("recurring_expenses").select("*").order("day_of_month", { ascending: true });
+      const { data: recData, error: recErr } = await getSupabase().from("recurring_expenses").select("*").order("day_of_month", { ascending: true });
       if (recErr) throw recErr;
 
       const mappedSuppliers = (supData || []).map(s => ({
@@ -252,9 +258,9 @@ export default function Home() {
       if (updates.total !== undefined) dbUpdates.total = updates.total;
       if (updates.currency !== undefined) dbUpdates.currency = updates.currency;
 
-      const { error: updErr } = await supabase.from("invoices").update(dbUpdates).eq("id", id);
+      const { error: updErr } = await getSupabase().from("invoices").update(dbUpdates).eq("id", id);
       if (updErr) throw updErr;
-      await supabase.from("invoice_events").insert({
+      await getSupabase().from("invoice_events").insert({
         invoice_id: id, event_type: "status_change",
         notes: `→ ${STATUSES[updates.status]?.label || "Editado"} por ${userName}`,
       });
@@ -281,8 +287,8 @@ export default function Home() {
   const deleteInvoice = useCallback(async (id) => {
     if (!confirm("¿Eliminar esta factura? Esta acción no se puede deshacer.")) return;
     try {
-      await supabase.from("invoice_events").delete().eq("invoice_id", id);
-      const { error } = await supabase.from("invoices").delete().eq("id", id);
+      await getSupabase().from("invoice_events").delete().eq("invoice_id", id);
+      const { error } = await getSupabase().from("invoices").delete().eq("id", id);
       if (error) throw error;
       setInvoices(prev => prev.filter(i => i.id !== id));
       notify("Factura eliminada");
@@ -298,7 +304,7 @@ export default function Home() {
     if (hasInvoices) { notify("No se puede eliminar: tiene facturas asociadas", "error"); return; }
     if (!confirm("¿Eliminar este proveedor?")) return;
     try {
-      const { error } = await supabase.from("suppliers").delete().eq("id", id);
+      const { error } = await getSupabase().from("suppliers").delete().eq("id", id);
       if (error) throw error;
       setSuppliers(prev => prev.filter(s => s.id !== id));
       notify("Proveedor eliminado");
@@ -312,7 +318,7 @@ export default function Home() {
   const deleteRecurring = useCallback(async (id) => {
     if (!confirm("¿Eliminar este gasto recurrente?")) return;
     try {
-      const { error } = await supabase.from("recurring_expenses").delete().eq("id", id);
+      const { error } = await getSupabase().from("recurring_expenses").delete().eq("id", id);
       if (error) throw error;
       setRecurring(prev => prev.filter(r => r.id !== id));
       notify("Gasto eliminado");
@@ -328,8 +334,8 @@ export default function Home() {
     if (!confirm(`¿${label} ${ids.length} factura(s)?`)) return false;
     try {
       for (const id of ids) {
-        await supabase.from("invoices").update({ status: updates.status, updated_at: new Date().toISOString() }).eq("id", id);
-        await supabase.from("invoice_events").insert({ invoice_id: id, event_type: "status_change", notes: `→ ${label} por ${userName} (lote)` });
+        await getSupabase().from("invoices").update({ status: updates.status, updated_at: new Date().toISOString() }).eq("id", id);
+        await getSupabase().from("invoice_events").insert({ invoice_id: id, event_type: "status_change", notes: `→ ${label} por ${userName} (lote)` });
       }
       setInvoices(prev => prev.map(inv => ids.includes(inv.id) ? {
         ...inv, ...updates,
@@ -348,8 +354,8 @@ export default function Home() {
     if (!confirm(`¿Eliminar ${ids.length} factura(s)? Esta acción no se puede deshacer.`)) return false;
     try {
       for (const id of ids) {
-        await supabase.from("invoice_events").delete().eq("invoice_id", id);
-        await supabase.from("invoices").delete().eq("id", id);
+        await getSupabase().from("invoice_events").delete().eq("invoice_id", id);
+        await getSupabase().from("invoices").delete().eq("id", id);
       }
       setInvoices(prev => prev.filter(i => !ids.includes(i.id)));
       notify(`${ids.length} factura(s) eliminada(s)`);
@@ -366,7 +372,7 @@ export default function Home() {
     if (withInvoices.length > 0) { notify(`${withInvoices.length} proveedor(es) tienen facturas asociadas y no se pueden eliminar`, "error"); return false; }
     if (!confirm(`¿Eliminar ${ids.length} proveedor(es)?`)) return false;
     try {
-      for (const id of ids) { await supabase.from("suppliers").delete().eq("id", id); }
+      for (const id of ids) { await getSupabase().from("suppliers").delete().eq("id", id); }
       setSuppliers(prev => prev.filter(s => !ids.includes(s.id)));
       notify(`${ids.length} proveedor(es) eliminado(s)`);
       return true;
@@ -379,7 +385,7 @@ export default function Home() {
 
   // ─── Re-extract invoice via AI ─────────────────────────
   const reExtractInvoice = useCallback(async (invoiceId, filePath) => {
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session } } = await getSupabase().auth.getSession();
     const res = await fetch("/api/invoices/re-extract", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
@@ -452,13 +458,13 @@ export default function Home() {
         <Notifications notification={notification} nav={nav} setNotification={setNotification} mobile={mobile} />
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
-        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} supabase={supabase} />}
-        {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} onReExtract={reExtractInvoice} supabase={supabase} />}
+        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} supabase={getSupabase()} />}
+        {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} onReExtract={reExtractInvoice} supabase={getSupabase()} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
-        {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} supabase={supabase} />}
-        {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} supabase={supabase} />}
-        {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} categories={categories} supabase={supabase} />}
-        {view === "cashflow" && <CashflowView supabase={supabase} mobile={mobile} notify={notify} />}
+        {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} supabase={getSupabase()} />}
+        {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} supabase={getSupabase()} />}
+        {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} categories={categories} supabase={getSupabase()} />}
+        {view === "cashflow" && <CashflowView supabase={getSupabase()} mobile={mobile} notify={notify} />}
       </main>
 
       {mobile && <BottomNav />}
