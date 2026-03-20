@@ -76,6 +76,7 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
     setUploading(true);
     let ok = 0, fail = 0;
     const createdSuppliers = [];
+    const linkedRecurring = [];
     for (let i = 0; i < valid.length; i++) {
       const file = valid[i];
       setUploadProgress(`Procesando ${i + 1} de ${valid.length}: ${file.name}`);
@@ -103,6 +104,9 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
           if (data.supplier_created && data.supplier_name) {
             createdSuppliers.push({ name: data.supplier_name, id: data.supplier_id });
           }
+          if (data.recurring_linked) {
+            linkedRecurring.push(data.recurring_linked);
+          }
         }
       } catch (err) {
         console.error("Upload error:", err);
@@ -117,7 +121,10 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
       notify(`✅ ${ok} factura(s) subida(s)${fail > 0 ? ` · ${fail} con error` : ""}`);
       if (onInvoiceUploaded) onInvoiceUploaded();
       createdSuppliers.forEach(s => {
-        setTimeout(() => notify(`Proveedor "${s.name}" creado automáticamente — tocá para completar datos`, "supplier_created", s.id), 800);
+        setTimeout(() => notify(`Proveedor "${s.name}" creado autom\u00e1ticamente \u2014 toc\u00e1 para completar datos`, "supplier_created", s.id), 800);
+      });
+      linkedRecurring.forEach(name => {
+        setTimeout(() => notify(`Factura asociada autom\u00e1ticamente al recurrente: ${name}`), 1200);
       });
     } else {
       notify(`Error subiendo ${fail} factura(s)`, "error");

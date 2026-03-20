@@ -362,6 +362,48 @@ export async function POST(request) {
     });
     if (eventErr) console.error("Event insert error:", eventErr.message, eventErr.code, eventErr.details);
 
+    // ─── Auto-link to recurring instance if supplier matches ──
+    let recurringLinked = null;
+    if (supplierId) {
+      try {
+        const currentPeriod = new Date().toISOString().slice(0, 7); // "2026-03"
+        // Find recurring expense for this supplier
+        const { data: matchedRecurring } = await supabase
+          .from("recurring_expenses")
+          .select("id, name")
+          .eq("supplier_id", supplierId)
+          .eq("active", true)
+          .limit(1)
+          .maybeSingle();
+
+        if (matchedRecurring) {
+          // Find pending instance for current period
+          const { data: pendingInstance } = await supabase
+            .from("recurring_instances")
+            .select("id")
+            .eq("recurring_id", matchedRecurring.id)
+            .eq("period", currentPeriod)
+            .eq("status", "pending")
+            .maybeSingle();
+
+          if (pendingInstance) {
+            const { error: linkErr } = await supabase
+              .from("recurring_instances")
+              .update({ status: "invoice_linked", invoice_id: newInvoice.id })
+              .eq("id", pendingInstance.id);
+
+            if (!linkErr) {
+              recurringLinked = matchedRecurring.name;
+              console.log(`Auto-linked invoice ${newInvoice.id} to recurring "${matchedRecurring.name}" instance ${pendingInstance.id}`);
+            }
+          }
+        }
+      } catch (linkError) {
+        // Non-blocking — don't fail the upload
+        console.error("Recurring auto-link error:", linkError.message);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       invoice: newInvoice,
@@ -370,6 +412,7 @@ export async function POST(request) {
       supplier_created: supplierCreated,
       supplier_id: supplierId,
       supplier_name: extracted.emisor_nombre || null,
+      recurring_linked: recurringLinked,
     });
   } catch (err) {
     console.error("=== INVOICE UPLOAD UNHANDLED ERROR ===");
