@@ -12,6 +12,13 @@ import RecurringView from "@/components/RecurringView";
 import Suppliers from "@/components/Suppliers";
 import SupDetail from "@/components/SupplierDetail";
 import CashflowView from "@/components/CashflowView";
+import ModuleLauncher from "@/components/ModuleLauncher";
+
+// ─── Module registry ─────────────────────────────────────────
+const MODULES = [
+  { key: "pagos", label: "Gestión de Pagos", icon: "📄", description: "Facturas, proveedores, pagos y recurrentes" },
+  { key: "cashflow", label: "Cashflow", icon: "📈", description: "Proyección de flujo de caja" },
+];
 
 // ─── Supabase Client (lazy singleton — avoids build-time crash) ──
 let _supabase = null;
@@ -75,7 +82,7 @@ function LoginScreen({ onLogin }) {
   return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", fontFamily: "system-ui, -apple-system, sans-serif", background: "linear-gradient(135deg, #1a1a2e 0%, #2d2b55 100%)" }}>
     <div style={{ textAlign: "center", padding: 40, background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.3)", maxWidth: 360, width: "90%" }}>
       <div style={{ fontSize: 36, fontWeight: 800, marginBottom: 4 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</div>
-      <div style={{ fontSize: 11, color: "#e85d04", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 28 }}>GESTIÓN DE PAGOS</div>
+      <div style={{ fontSize: 11, color: "#e85d04", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 28 }}>PLATAFORMA</div>
       <button onClick={handleGoogle} disabled={loggingIn} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", padding: "12px 20px", borderRadius: 10, border: "1px solid #e0e0e6", background: "#fff", fontSize: 14, fontWeight: 600, cursor: loggingIn ? "wait" : "pointer", color: "#1a1a2e", transition: "all 0.15s", boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
         <svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
         {loggingIn ? "Conectando..." : "Iniciar sesión con Google"}
@@ -96,6 +103,7 @@ export default function Home() {
   const mobile = useIsMobile();
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [activeModule, setActiveModule] = useState(null);
   const [view, setView] = useState("dashboard");
   const [selectedId, setSelectedId] = useState(null);
   const [invoices, setInvoices] = useState([]);
@@ -166,7 +174,7 @@ export default function Home() {
       const { data: supData, error: supErr } = await getSupabase().from("suppliers").select("*").order("name");
       if (supErr) throw supErr;
 
-      const { data: invData, error: invErr } = await supabase
+      const { data: invData, error: invErr } = await getSupabase()
         .from("invoices")
         .select(`*, invoice_events ( id, event_type, performed_by, created_at, notes )`)
         .order("due_date", { ascending: true });
@@ -403,16 +411,62 @@ export default function Home() {
   if (loading) return <LoadingScreen />;
   if (error) return <ErrorScreen error={error} onRetry={fetchData} />;
 
+  // ─── Launcher ─────────────────────────────────────────
+  const goToLauncher = () => { setActiveModule(null); setView("dashboard"); setSelectedId(null); };
+
+  if (!activeModule) {
+    return <ModuleLauncher
+      modules={MODULES}
+      onSelect={setActiveModule}
+      userName={userName}
+      userInitial={userInitial}
+      userAvatar={userAvatar}
+      userRoleLabel={userRoleLabel}
+      onSignOut={signOut}
+      mobile={mobile}
+    />;
+  }
+
+  // ─── Module: Cashflow ─────────────────────────────────
+  if (activeModule === "cashflow") {
+    return (
+      <div style={{ minHeight: "100vh", fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7fa", color: "#1a1a2e" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: mobile ? "12px 12px 0" : "16px 22px 0" }}>
+          <button onClick={goToLauncher} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#8b8b9e", padding: "6px 0" }}>
+            <span style={{ fontSize: 16 }}>←</span>
+            <span style={{ fontSize: 15, fontWeight: 800 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</span>
+          </button>
+          <span style={{ color: "#d1d1d8" }}>|</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>Cashflow</span>
+        </div>
+        <div style={{ padding: mobile ? 12 : 22 }}>
+          <CashflowView supabase={getSupabase()} mobile={mobile} notify={notify} />
+        </div>
+        <style>{`
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          input, select, textarea { font-family: inherit; font-size: 16px; }
+          button { font-family: inherit; }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ─── Module: Gestión de Pagos ─────────────────────────
   const navItems = [
     { key: "dashboard", label: "Dashboard", icon: "📊" },
     { key: "inbox", label: "Inbox", icon: "📥", badge: stats.inbox },
     { key: "payables", label: "Pagos", icon: "💰", badge: stats.payable.length },
     { key: "recurring", label: "Fijos", icon: "🔄" },
     { key: "suppliers", label: "Proveedores", icon: "🏢" },
-    { key: "cashflow", label: "Cashflow", icon: "📈" },
   ];
 
   const BottomNav = () => <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #e8e8ec", display: "flex", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+    <button onClick={goToLauncher} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 0 6px", border: "none", background: "transparent", cursor: "pointer", color: "#8b8b9e" }}>
+      <span style={{ fontSize: 18 }}>⬅</span>
+      <span style={{ fontSize: 9, fontWeight: 600 }}>Módulos</span>
+    </button>
     {navItems.map(it => (
       <button key={it.key} onClick={() => nav(it.key)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 0 6px", border: "none", background: "transparent", cursor: "pointer", color: view === it.key ? "#e85d04" : "#8b8b9e", position: "relative" }}>
         <span style={{ fontSize: 18 }}>{it.icon}</span>
@@ -424,8 +478,10 @@ export default function Home() {
 
   const Sidebar = () => <nav style={{ width: 200, background: "#1a1a2e", color: "#fff", display: "flex", flexDirection: "column", padding: "14px 0", flexShrink: 0 }}>
     <div style={{ padding: "0 14px 16px", borderBottom: "1px solid #2a2a4e" }}>
-      <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.03em" }}><span style={{ color: "#e85d04" }}>Caj</span>ú</div>
-      <div style={{ fontSize: 9, color: "#e85d04", marginTop: 1, letterSpacing: "0.06em" }}>GESTIÓN DE PAGOS</div>
+      <button onClick={goToLauncher} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "block" }}>
+        <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.03em" }}><span style={{ color: "#e85d04" }}>Caj</span><span style={{ color: "#fff" }}>ú</span></div>
+        <div style={{ fontSize: 9, color: "#e85d04", marginTop: 1, letterSpacing: "0.06em" }}>GESTIÓN DE PAGOS</div>
+      </button>
     </div>
     <div style={{ flex: 1, padding: "8px 6px", display: "flex", flexDirection: "column", gap: 1 }}>
       {navItems.map(it => (
@@ -435,10 +491,15 @@ export default function Home() {
         </button>
       ))}
     </div>
-    <div style={{ padding: "10px 14px", borderTop: "1px solid #2a2a4e", display: "flex", alignItems: "center", gap: 7 }}>
-      {userAvatar ? <img src={userAvatar} alt="" style={{ width: 28, height: 28, borderRadius: 7 }} referrerPolicy="no-referrer" /> : <div style={{ width: 28, height: 28, borderRadius: 7, background: "#e85d04", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{userInitial}</div>}
-      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</div><div style={{ fontSize: 9, color: "#e85d04" }}>{userRoleLabel}</div></div>
-      <button onClick={signOut} title="Cerrar sesión" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#8b8b9e", padding: 4 }}>⏻</button>
+    <div style={{ padding: "10px 14px", borderTop: "1px solid #2a2a4e" }}>
+      <button onClick={goToLauncher} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", padding: "7px 10px", border: "none", borderRadius: 7, cursor: "pointer", background: "transparent", color: "#8b8b9e", fontSize: 12, fontWeight: 500, marginBottom: 8 }}>
+        <span style={{ fontSize: 14 }}>←</span> Todos los módulos
+      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, paddingTop: 8, borderTop: "1px solid #2a2a4e" }}>
+        {userAvatar ? <img src={userAvatar} alt="" style={{ width: 28, height: 28, borderRadius: 7 }} referrerPolicy="no-referrer" /> : <div style={{ width: 28, height: 28, borderRadius: 7, background: "#e85d04", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{userInitial}</div>}
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</div><div style={{ fontSize: 9, color: "#e85d04" }}>{userRoleLabel}</div></div>
+        <button onClick={signOut} title="Cerrar sesión" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#8b8b9e", padding: 4 }}>⏻</button>
+      </div>
     </div>
   </nav>;
 
@@ -448,7 +509,9 @@ export default function Home() {
 
       <main style={{ flex: 1, overflow: "auto", overflowX: "hidden", padding: mobile ? "12px 12px 72px" : 22, minWidth: 0 }}>
         {mobile && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "4px 0" }}>
-          <div style={{ fontSize: 17, fontWeight: 800 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</div>
+          <button onClick={goToLauncher} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+            <span style={{ fontSize: 17, fontWeight: 800 }}><span style={{ color: "#e85d04" }}>Caj</span>ú</span>
+          </button>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button onClick={signOut} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#8b8b9e", fontWeight: 600 }}>Salir</button>
             {userAvatar ? <img src={userAvatar} alt="" style={{ width: 28, height: 28, borderRadius: 7 }} referrerPolicy="no-referrer" /> : <div style={{ width: 28, height: 28, borderRadius: 7, background: "#e85d04", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#fff" }}>{userInitial}</div>}
@@ -464,7 +527,6 @@ export default function Home() {
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} onDelete={deleteRecurring} notify={notify} mobile={mobile} categories={categories} updateCategories={updateCategories} supabase={getSupabase()} />}
         {view === "suppliers" && !selSup && <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} invoices={invoices} nav={nav} mobile={mobile} onBatchDelete={batchDeleteSuppliers} categories={categories} supabase={getSupabase()} />}
         {view === "suppliers" && selSup && <SupDetail sup={selSup} invs={invoices.filter(i => i.supplier_id === selSup.id)} suppliers={suppliers} setSuppliers={setSuppliers} onBack={() => nav("suppliers")} onDelete={deleteSupplier} notify={notify} mobile={mobile} categories={categories} supabase={getSupabase()} />}
-        {view === "cashflow" && <CashflowView supabase={getSupabase()} mobile={mobile} notify={notify} />}
       </main>
 
       {mobile && <BottomNav />}
