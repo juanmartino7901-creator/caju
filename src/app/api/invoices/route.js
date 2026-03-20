@@ -17,27 +17,33 @@ function getStorageClient() {
 }
 
 // ─── Claude Vision extraction prompt ────────────────────────
-const EXTRACTION_PROMPT = `Sos un extractor de datos de facturas uruguayas (e-factura, CFE). Analizá esta imagen/documento y extraé los siguientes campos en formato JSON estricto.
+const EXTRACTION_PROMPT = `Sos un extractor de datos de documentos financieros uruguayos. Podés recibir DOS tipos de documento:
+
+1. FACTURAS (e-factura, CFE, ticket) — el caso más común
+2. LIQUIDACIONES DE SUELDO (recibos de haberes) — reconocibles por campos como "Haberes", "Descuentos", "Líquido a Cobrar", "BPS", "IRPF", "Sueldo Básico", "Aportes Jubilatorios", "Fonasa", "FRL"
+
+Analizá la imagen/documento, determiná qué tipo es, y extraé los campos en formato JSON estricto.
 
 Respondé SOLO con un JSON válido, sin texto antes ni después. Campos:
 
 {
-  "emisor_nombre": "Razón social del emisor",
-  "emisor_rut": "RUT del emisor (12 dígitos)",
-  "comprador_nombre": "Razón social del comprador",
-  "comprador_rut": "RUT del comprador (12 dígitos)",
-  "invoice_number": "Número de factura completo (ej: A 00017847)",
-  "invoice_series": "Serie (ej: A, B, E)",
-  "issue_date": "Fecha de emisión en formato YYYY-MM-DD",
-  "due_date": "Fecha de vencimiento en formato YYYY-MM-DD o null si dice CONTADO o no tiene",
+  "doc_type": "invoice" o "payroll",
+  "emisor_nombre": "Razón social del emisor (en facturas) o nombre de la empresa empleadora (en recibos de sueldo)",
+  "emisor_rut": "RUT del emisor/empresa (12 dígitos)",
+  "comprador_nombre": "Razón social del comprador (facturas) o nombre del empleado (recibos)",
+  "comprador_rut": "RUT del comprador o CI del empleado",
+  "invoice_number": "Número de factura (facturas) o 'LIQ-MES-AÑO-CI' para recibos (ej: LIQ-FEB-2026-5045804). MES en español 3 letras mayúsculas: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SET, OCT, NOV, DIC",
+  "invoice_series": "Serie (facturas) o 'LIQ' (recibos)",
+  "issue_date": "Fecha de emisión (facturas) o último día del período liquidado (recibos), formato YYYY-MM-DD",
+  "due_date": "Fecha de vencimiento o null. Para recibos de sueldo = issue_date",
   "currency": "UYU o USD",
-  "subtotal": número sin IVA (monto exento + monto gravado),
-  "tax_amount": número total de IVA,
-  "total": número total a pagar,
-  "cae": "Número de CAE",
-  "payment_terms": "CONTADO, 15 días, 30 días, etc.",
+  "subtotal": "Para facturas: monto sin IVA. Para recibos: total de haberes (sueldo bruto)",
+  "tax_amount": "Para facturas: IVA. Para recibos: total de descuentos (BPS + IRPF + Fonasa + FRL + otros descuentos). SIEMPRE positivo",
+  "total": "Para facturas: total a pagar. Para recibos: el LÍQUIDO A COBRAR (haberes - descuentos). Este es el monto que se paga",
+  "cae": "CAE (solo facturas) o null",
+  "payment_terms": "CONTADO, 30 días, etc. Para recibos: 'MENSUAL'",
   "line_items": [
-    {"description": "texto", "quantity": número, "unit_price": número, "amount": número}
+    {"description": "texto", "quantity": 1, "unit_price": número, "amount": número}
   ],
   "confidence": {
     "emisor_nombre": 0.0-1.0,
@@ -51,15 +57,26 @@ Respondé SOLO con un JSON válido, sin texto antes ni después. Campos:
   }
 }
 
-Notas:
+=== REGLAS PARA RECIBOS DE SUELDO ===
+- emisor_nombre = nombre de la EMPRESA (ej: "Renenutet SAS"), NO del empleado
+- invoice_number = "LIQ-MES-AÑO-CI" usando la CI del empleado sin puntos ni guiones (ej: "LIQ-FEB-2026-5045804")
+- total = "Líquido a Cobrar" o "Neto a cobrar" — es lo que se deposita al empleado
+- subtotal = Total de Haberes (sueldo bruto antes de descuentos)
+- tax_amount = Total de Descuentos (BPS jubilatorio + IRPF + Fonasa + FRL + otros). Siempre positivo
+- line_items: incluir cada concepto de haberes como item positivo (Sueldo Básico, Horas Extras, Presentismo, Aguinaldo, etc.) y cada descuento como item con amount NEGATIVO (BPS, IRPF, Fonasa, Anticipo, etc.)
+- issue_date = último día del mes del período. Si dice "Febrero 2026" → 2026-02-28
+
+=== REGLAS PARA FACTURAS ===
 - IMPORTANTE: Los montos SIEMPRE como números con punto decimal. Convertí formato uruguayo (punto=miles, coma=decimal) a formato JSON: "3.235,01" → 3235.01, "1.500" → 1500, "450,50" → 450.50
-- Si no hay un total explícito en el documento, sumá todos los line_items para calcular el total. Calculá subtotal = total - tax_amount
+- Si no hay un total explícito, sumá los line_items. Calculá subtotal = total - tax_amount
 - Si hay subtotal e IVA pero no total, calculá total = subtotal + tax_amount
-- Si solo hay un monto total, usá ese como total y estimá subtotal e IVA (22% en Uruguay)
-- Si un campo no es legible, poné null y confidence 0.0
+- Si solo hay un monto total, estimá subtotal e IVA (22% en Uruguay)
 - Si dice CONTADO y no hay fecha de vencimiento, due_date = issue_date
+
+=== REGLAS GENERALES ===
+- Los montos SIEMPRE como números JSON (no strings). Formato uruguayo → JSON: "3.235,01" → 3235.01
+- Si un campo no es legible, poné null y confidence 0.0
 - El RUT uruguayo tiene 12 dígitos
-- Separá monto exento y gravado si es posible para calcular subtotal
 - NUNCA devuelvas 0 para total si hay montos visibles en el documento`;
 
 export async function POST(request) {
