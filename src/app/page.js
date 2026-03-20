@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { fmt, daysUntil, STATUSES } from "@/lib/utils";
 import { Btn } from "@/components/SharedUI";
@@ -405,6 +405,113 @@ export default function Home() {
     return data;
   }, [fetchData]);
 
+  // ─── Global Upload State ────────────────────────────────
+  const [uploadState, setUploadState] = useState({
+    active: false,      // upload in progress
+    total: 0,
+    processed: 0,
+    ok: 0,
+    errors: 0,
+    linkedRecurring: 0,
+    results: null,      // final report: { ok: [...], failed: [...], linked: [...] }
+    dismissed: false,    // user closed the report
+  });
+  const uploadRunning = useRef(false);
+
+  const startUpload = useCallback(async (files) => {
+    if (!files || files.length === 0 || uploadRunning.current) return;
+    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    const valid = Array.from(files).filter(f => allowed.includes(f.type) && f.size <= 10 * 1024 * 1024);
+    if (valid.length === 0) { notify("Ningún archivo válido", "error"); return; }
+
+    uploadRunning.current = true;
+    setUploadState({ active: true, total: valid.length, processed: 0, ok: 0, errors: 0, linkedRecurring: 0, results: null, dismissed: false });
+
+    const okList = [];
+    const failList = [];
+    const linkedList = [];
+
+    // Process in batches of 3
+    const CONCURRENCY = 3;
+    const TIMEOUT = 60000;
+
+    const processOne = async (file) => {
+      const { data: { session } } = await getSupabase().auth.getSession();
+      const formData = new FormData();
+      formData.append("file", file);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT);
+      try {
+        const res = await fetch("/api/invoices", {
+          method: "POST",
+          body: formData,
+          headers: { Authorization: `Bearer ${session?.access_token}` },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        if (!res.ok) {
+          return { success: false, name: file.name, error: data.error || `Error ${res.status}` };
+        }
+        const result = { success: true, name: file.name };
+        if (data.supplier_created) result.supplierCreated = data.supplier_name;
+        if (data.recurring_linked) result.recurringLinked = data.recurring_linked;
+        return result;
+      } catch (err) {
+        clearTimeout(timer);
+        if (err.name === "AbortError") return { success: false, name: file.name, error: "Timeout (60s)", retry: true };
+        return { success: false, name: file.name, error: err.message || "Error de red" };
+      }
+    };
+
+    let i = 0;
+    const runBatch = async () => {
+      while (i < valid.length) {
+        const batch = valid.slice(i, i + CONCURRENCY);
+        i += batch.length;
+        const results = await Promise.all(batch.map(async (file) => {
+          let result = await processOne(file);
+          // Retry once on timeout
+          if (!result.success && result.retry) {
+            result = await processOne(file);
+          }
+          return result;
+        }));
+
+        for (const r of results) {
+          if (r.success) {
+            okList.push(r);
+            if (r.recurringLinked) linkedList.push(r.recurringLinked);
+          } else {
+            failList.push(r);
+          }
+        }
+
+        setUploadState(prev => ({
+          ...prev,
+          processed: okList.length + failList.length,
+          ok: okList.length,
+          errors: failList.length,
+          linkedRecurring: linkedList.length,
+        }));
+      }
+    };
+
+    await runBatch();
+
+    setUploadState(prev => ({
+      ...prev,
+      active: false,
+      results: { ok: okList, failed: failList, linked: linkedList },
+    }));
+    uploadRunning.current = false;
+    if (okList.length > 0) fetchData();
+  }, [notify, fetchData]);
+
+  const dismissUpload = useCallback(() => {
+    setUploadState({ active: false, total: 0, processed: 0, ok: 0, errors: 0, linkedRecurring: 0, results: null, dismissed: true });
+  }, []);
+
   // ─── Auth / Loading / Error screens ────────────────────
   if (authLoading) return <LoadingScreen />;
   if (!user) return <LoginScreen onLogin={signInWithGoogle} />;
@@ -521,7 +628,7 @@ export default function Home() {
         <Notifications notification={notification} nav={nav} setNotification={setNotification} mobile={mobile} />
 
         {view === "dashboard" && <Dashboard stats={stats} invoices={invoices} recurring={recurring} suppliers={suppliers} nav={nav} mobile={mobile} />}
-        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} supabase={getSupabase()} />}
+        {view === "inbox" && !selInv && <Inbox invoices={invoices} suppliers={suppliers} filters={filters} setFilters={setFilters} nav={nav} notify={notify} mobile={mobile} onInvoiceUploaded={fetchData} onBatchUpdate={batchUpdateInvoices} onBatchDelete={batchDeleteInvoices} supabase={getSupabase()} uploadState={uploadState} onStartUpload={startUpload} onDismissUpload={dismissUpload} />}
         {view === "inbox" && selInv && <InvDetail inv={selInv} sup={getSup(suppliers, selInv.supplier_id)} suppliers={suppliers} onBack={() => nav("inbox")} onUpdate={updateInvoice} onDelete={deleteInvoice} notify={notify} mobile={mobile} onReExtract={reExtractInvoice} supabase={getSupabase()} />}
         {view === "payables" && <Payables invoices={invoices} suppliers={suppliers} recurring={recurring} onUpdate={updateInvoice} sel={paySelection} setSel={setPaySelection} notify={notify} mobile={mobile} />}
         {view === "recurring" && <RecurringView recurring={recurring} setRecurring={setRecurring} suppliers={suppliers} invoices={invoices} onDelete={deleteRecurring} notify={notify} nav={nav} mobile={mobile} categories={categories} updateCategories={updateCategories} supabase={getSupabase()} />}
@@ -530,6 +637,80 @@ export default function Home() {
       </main>
 
       {mobile && <BottomNav />}
+
+      {/* ─── Global Upload Banner ──────────────────────── */}
+      {(uploadState.active || (uploadState.results && !uploadState.dismissed)) && (
+        <div style={{ position: "fixed", bottom: mobile ? 56 : 16, left: mobile ? 8 : 216, right: mobile ? 8 : 16, zIndex: 200, animation: "fadeIn 0.2s ease" }}>
+          {/* Progress banner (during upload) */}
+          {uploadState.active && (
+            <div onClick={() => nav("inbox")} style={{ background: "#1a1a2e", color: "#fff", borderRadius: 12, padding: "12px 16px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", cursor: "pointer" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Subiendo facturas: {uploadState.processed}/{uploadState.total}{uploadState.errors > 0 ? ` \u2014 ${uploadState.errors} error${uploadState.errors > 1 ? "es" : ""}` : ""}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#e85d04" }}>{uploadState.total > 0 ? Math.round((uploadState.processed / uploadState.total) * 100) : 0}%</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.15)", borderRadius: 4, height: 6, overflow: "hidden" }}>
+                <div style={{ height: "100%", background: "#e85d04", borderRadius: 4, width: `${uploadState.total > 0 ? Math.round((uploadState.processed / uploadState.total) * 100) : 0}%`, transition: "width 0.3s" }} />
+              </div>
+            </div>
+          )}
+
+          {/* Results report (after upload) */}
+          {!uploadState.active && uploadState.results && !uploadState.dismissed && (
+            <div style={{ background: "#fff", borderRadius: 12, padding: 16, boxShadow: "0 8px 24px rgba(0,0,0,0.15)", border: "1px solid #e8e8ec", maxHeight: mobile ? 300 : 400, overflow: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>Reporte de carga</div>
+                <button onClick={dismissUpload} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#8b8b9e", padding: 0 }}>{"\u2715"}</button>
+              </div>
+
+              {/* Summary */}
+              <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+                <div style={{ padding: "8px 12px", background: "#f7f7fa", borderRadius: 8, textAlign: "center", flex: 1, minWidth: 70 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>{uploadState.results.ok.length + uploadState.results.failed.length}</div>
+                  <div style={{ fontSize: 10, color: "#8b8b9e", fontWeight: 600 }}>Total</div>
+                </div>
+                <div style={{ padding: "8px 12px", background: "#d1fae5", borderRadius: 8, textAlign: "center", flex: 1, minWidth: 70 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#10b981" }}>{uploadState.results.ok.length}</div>
+                  <div style={{ fontSize: 10, color: "#10b981", fontWeight: 600 }}>Exitosas</div>
+                </div>
+                {uploadState.results.failed.length > 0 && <div style={{ padding: "8px 12px", background: "#fee2e2", borderRadius: 8, textAlign: "center", flex: 1, minWidth: 70 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#ef4444" }}>{uploadState.results.failed.length}</div>
+                  <div style={{ fontSize: 10, color: "#ef4444", fontWeight: 600 }}>Fallidas</div>
+                </div>}
+                {uploadState.results.linked.length > 0 && <div style={{ padding: "8px 12px", background: "#dbeafe", borderRadius: 8, textAlign: "center", flex: 1, minWidth: 70 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#3b82f6" }}>{uploadState.results.linked.length}</div>
+                  <div style={{ fontSize: 10, color: "#3b82f6", fontWeight: 600 }}>Auto-asociadas</div>
+                </div>}
+              </div>
+
+              {/* Failed list */}
+              {uploadState.results.failed.length > 0 && <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>Fallidas:</div>
+                {uploadState.results.failed.map((f, i) => (
+                  <div key={i} style={{ fontSize: 11, padding: "4px 0", borderBottom: "1px solid #f3f3f6", display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontWeight: 500 }}>{f.name}</span>
+                    <span style={{ color: "#ef4444", fontSize: 10 }}>{f.error}</span>
+                  </div>
+                ))}
+              </>}
+
+              {/* Ok list (collapsed by default if many) */}
+              {uploadState.results.ok.length > 0 && <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#10b981", marginTop: 8, marginBottom: 4 }}>Exitosas:</div>
+                {uploadState.results.ok.slice(0, 10).map((f, i) => (
+                  <div key={i} style={{ fontSize: 11, padding: "3px 0", color: "#6b7280" }}>
+                    {f.name}{f.recurringLinked ? ` \u2192 ${f.recurringLinked}` : ""}
+                  </div>
+                ))}
+                {uploadState.results.ok.length > 10 && <div style={{ fontSize: 11, color: "#8b8b9e", padding: "4px 0" }}>...y {uploadState.results.ok.length - 10} m\u00e1s</div>}
+              </>}
+
+              <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+                <button onClick={dismissUpload} style={{ padding: "6px 16px", borderRadius: 8, border: "none", background: "#e85d04", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cerrar</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
