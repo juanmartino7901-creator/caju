@@ -3,10 +3,13 @@ import { useState } from "react";
 import { fmt, BANK_CODES } from "@/lib/utils";
 import { Card, Btn, Input, Select } from "@/components/SharedUI";
 
-export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDelete, categories, supabase }) {
+export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobile, onBatchDelete, categories, supabase, onReloadData }) {
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
   const [sel, setSel] = useState(new Set());
+  const [dedupPreview, setDedupPreview] = useState(null); // GET result
+  const [dedupLoading, setDedupLoading] = useState(false);
+  const [dedupResult, setDedupResult] = useState(null); // POST result
   const [form, setForm] = useState({ name: "", alias: "", tax_id: "", category: "Insumos", bank: "Itaú", account_type: "CC", account_number: "", currency: "UYU", phone: "", email: "", contact: "", payment_terms: "30 días", notes: "" });
   const filtered = suppliers.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.alias?.toLowerCase().includes(search.toLowerCase()) || s.tax_id?.includes(search));
 
@@ -35,11 +38,98 @@ export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobi
     setShowForm(false);
   };
 
+  const apiCall = async (method) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch("/api/suppliers/dedup", {
+      method,
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    return await res.json();
+  };
+
+  const runDedupPreview = async () => {
+    setDedupLoading(true);
+    setDedupResult(null);
+    const data = await apiCall("GET");
+    setDedupPreview(data);
+    setDedupLoading(false);
+  };
+
+  const executDedup = async () => {
+    setDedupLoading(true);
+    const data = await apiCall("POST");
+    setDedupResult(data);
+    setDedupLoading(false);
+    if (data.success && onReloadData) onReloadData();
+  };
+
   return <div style={{ animation: "fadeIn 0.25s ease", overflow: "hidden", maxWidth: "100%" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Proveedores</h1>
-      <Btn size={mobile ? "sm" : "md"} onClick={() => setShowForm(!showForm)}>+ Nuevo</Btn>
+      <div style={{ display: "flex", gap: 6 }}>
+        <Btn variant="secondary" size="sm" onClick={runDedupPreview} disabled={dedupLoading}>Deduplicar</Btn>
+        <Btn size={mobile ? "sm" : "md"} onClick={() => setShowForm(!showForm)}>+ Nuevo</Btn>
+      </div>
     </div>
+
+    {/* Dedup modal */}
+    {(dedupPreview || dedupResult) && (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => { setDedupPreview(null); setDedupResult(null); }}>
+        <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 20, maxWidth: 560, width: "100%", maxHeight: "80vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+          {dedupResult ? <>
+            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Deduplicación completada</h3>
+            <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+              <div style={{ padding: "10px 14px", background: "#d1fae5", borderRadius: 8, textAlign: "center", flex: 1 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#10b981" }}>{dedupResult.duplicates_removed}</div>
+                <div style={{ fontSize: 10, color: "#10b981", fontWeight: 600 }}>Eliminados</div>
+              </div>
+              <div style={{ padding: "10px 14px", background: "#dbeafe", borderRadius: 8, textAlign: "center", flex: 1 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#3b82f6" }}>{dedupResult.invoices_reassigned}</div>
+                <div style={{ fontSize: 10, color: "#3b82f6", fontWeight: 600 }}>Facturas reasignadas</div>
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <Btn size="sm" onClick={() => { setDedupPreview(null); setDedupResult(null); }}>Cerrar</Btn>
+            </div>
+          </> : dedupPreview ? <>
+            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Deduplicar proveedores</h3>
+            <div style={{ fontSize: 12, color: "#8b8b9e", marginBottom: 12 }}>
+              {dedupPreview.total_suppliers} proveedores total &middot; {dedupPreview.duplicate_groups} grupos duplicados &middot; {dedupPreview.duplicates_to_remove} a eliminar
+            </div>
+
+            {dedupPreview.duplicate_groups === 0 && (
+              <div style={{ padding: 20, textAlign: "center", color: "#8b8b9e", fontSize: 13 }}>
+                No se encontraron duplicados
+              </div>
+            )}
+
+            {dedupPreview.groups?.map((g, i) => (
+              <div key={i} style={{ padding: 10, marginBottom: 6, background: "#f7f7fa", borderRadius: 8, fontSize: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: g.match_type === "rut" ? "#dbeafe" : "#fef3c7", color: g.match_type === "rut" ? "#3b82f6" : "#d97706", fontWeight: 600 }}>{g.match_type === "rut" ? "RUT" : "Nombre"}</span>
+                  <span style={{ fontWeight: 600, color: "#10b981" }}>Mantener: {g.keep.name}</span>
+                  {g.keep.tax_id && <span style={{ color: "#8b8b9e" }}>({g.keep.tax_id})</span>}
+                </div>
+                {g.remove.map((r, j) => (
+                  <div key={j} style={{ paddingLeft: 16, color: "#ef4444", fontSize: 11 }}>
+                    Eliminar: {r.name}{r.tax_id ? ` (${r.tax_id})` : ""}
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            <div style={{ display: "flex", gap: 6, marginTop: 12, justifyContent: "flex-end" }}>
+              <Btn variant="secondary" size="sm" onClick={() => { setDedupPreview(null); setDedupResult(null); }}>Cancelar</Btn>
+              {dedupPreview.duplicate_groups > 0 && (
+                <Btn variant="danger" size="sm" onClick={executDedup} disabled={dedupLoading}>
+                  {dedupLoading ? "Procesando..." : `Ejecutar (eliminar ${dedupPreview.duplicates_to_remove})`}
+                </Btn>
+              )}
+            </div>
+          </> : null}
+        </div>
+      </div>
+    )}
 
     {showForm && <Card style={{ marginBottom: 14, border: "2px solid #e85d04", overflow: "hidden" }}>
       <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Nuevo Proveedor</h3>
