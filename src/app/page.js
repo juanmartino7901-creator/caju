@@ -431,14 +431,60 @@ export default function Home() {
     const failList = [];
     const linkedList = [];
 
+    // ─── Compress large images client-side ──────────────
+    const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB
+    const MAX_DIMENSION = 2000;
+
+    const compressImage = (file) => new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let { width, height } = img;
+        if (width <= MAX_DIMENSION && height <= MAX_DIMENSION && file.size <= MAX_IMAGE_SIZE) {
+          resolve(file); // no compression needed
+          return;
+        }
+        // Scale down
+        if (width > height) {
+          if (width > MAX_DIMENSION) { height = Math.round(height * MAX_DIMENSION / width); width = MAX_DIMENSION; }
+        } else {
+          if (height > MAX_DIMENSION) { width = Math.round(width * MAX_DIMENSION / height); height = MAX_DIMENSION; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) { resolve(file); return; }
+          const compressed = new File([blob], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
+          console.log(`Compressed ${file.name}: ${(file.size / 1024 / 1024).toFixed(1)}MB → ${(compressed.size / 1024 / 1024).toFixed(1)}MB (${width}x${height})`);
+          resolve(compressed);
+        }, "image/jpeg", 0.8);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+
     // Process in batches of 3
     const CONCURRENCY = 3;
     const TIMEOUT = 60000;
 
     const processOne = async (file) => {
       const { data: { session } } = await getSupabase().auth.getSession();
+
+      // Compress large images before upload
+      let uploadFile = file;
+      const isImage = file.type.startsWith("image/");
+      if (isImage && file.size > MAX_IMAGE_SIZE) {
+        setUploadState(prev => ({ ...prev, compressing: file.name }));
+        uploadFile = await compressImage(file);
+        setUploadState(prev => ({ ...prev, compressing: null }));
+      }
+
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", uploadFile);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT);
       try {
@@ -449,6 +495,15 @@ export default function Home() {
           signal: controller.signal,
         });
         clearTimeout(timer);
+
+        // Handle non-JSON responses (Vercel 413, HTML error pages, etc.)
+        const contentType = res.headers.get("content-type");
+        if (!contentType?.includes("application/json")) {
+          const text = await res.text();
+          console.error(`Upload non-JSON response: ${file.name}`, res.status, text.substring(0, 200));
+          return { success: false, name: file.name, error: `Server error ${res.status}: ${text.substring(0, 100)}` };
+        }
+
         const data = await res.json();
         if (!res.ok) {
           const errMsg = data.error || `Error ${res.status}`;
@@ -648,7 +703,7 @@ export default function Home() {
           {uploadState.active && (
             <div onClick={() => nav("inbox")} style={{ background: "#1a1a2e", color: "#fff", borderRadius: 12, padding: "12px 16px", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", cursor: "pointer" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>Subiendo facturas: {uploadState.processed}/{uploadState.total}{uploadState.errors > 0 ? ` \u2014 ${uploadState.errors} error${uploadState.errors > 1 ? "es" : ""}` : ""}</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{uploadState.compressing ? `Comprimiendo: ${uploadState.compressing}` : `Subiendo facturas: ${uploadState.processed}/${uploadState.total}`}{uploadState.errors > 0 ? ` \u2014 ${uploadState.errors} error${uploadState.errors > 1 ? "es" : ""}` : ""}</div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#e85d04" }}>{uploadState.total > 0 ? Math.round((uploadState.processed / uploadState.total) * 100) : 0}%</div>
               </div>
               <div style={{ background: "rgba(255,255,255,0.15)", borderRadius: 4, height: 6, overflow: "hidden" }}>
