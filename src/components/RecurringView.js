@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { fmt } from "@/lib/utils";
 import { Card, Btn, Input, Select, Progress } from "@/components/SharedUI";
 
@@ -169,6 +169,169 @@ export default function RecurringView({ recurring, setRecurring, suppliers, invo
     setShowForm(false); setEditId(null);
   };
 
+  // ─── Bulk upload state & logic ──────────────────────
+  const fileInputRef = useRef(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkPreview, setBulkPreview] = useState(null); // { rows: [], errors: [] }
+
+  const downloadTemplate = useCallback(async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Recurrentes");
+
+    const cols = [
+      { header: "Nombre *", key: "name", width: 25 },
+      { header: "Monto *", key: "amount", width: 14 },
+      { header: "Tipo", key: "type", width: 18 },
+      { header: "Día del mes", key: "day", width: 14 },
+      { header: "Categoría", key: "category", width: 18 },
+      { header: "Proveedor (nombre)", key: "supplier", width: 25 },
+      { header: "Total cuotas", key: "total_installments", width: 14 },
+      { header: "Cuota actual", key: "current_installment", width: 14 },
+      { header: "Tarjeta ****", key: "card_last4", width: 14 },
+    ];
+    ws.columns = cols;
+
+    // Style header
+    ws.getRow(1).eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1a1a2e" } };
+      cell.alignment = { horizontal: "center" };
+    });
+
+    // Add example row
+    ws.addRow({ name: "Alquiler local", amount: 45000, type: "Costo Fijo", day: 5, category: "Alquiler", supplier: "", total_installments: "", current_installment: "", card_last4: "" });
+    ws.getRow(2).font = { italic: true, color: { argb: "FF999999" } };
+
+    // Type dropdown validation
+    const typeList = '"Costo Fijo,Retiro Socio,Cuota Tarjeta"';
+    for (let r = 2; r <= 200; r++) {
+      ws.getCell(`C${r}`).dataValidation = { type: "list", formulae: [typeList], showErrorMessage: true, errorTitle: "Tipo inválido", error: "Usar: Costo Fijo, Retiro Socio o Cuota Tarjeta" };
+    }
+
+    // Category dropdown
+    const catList = `"${[...categories, "Retiro", "Tarjeta"].join(",")}"`;
+    for (let r = 2; r <= 200; r++) {
+      ws.getCell(`E${r}`).dataValidation = { type: "list", formulae: [catList], showErrorMessage: true, errorTitle: "Categoría inválida", error: "Seleccionar una categoría de la lista" };
+    }
+
+    // Instructions sheet
+    const instr = wb.addWorksheet("Instrucciones");
+    instr.getColumn(1).width = 60;
+    const instructions = [
+      "INSTRUCCIONES PARA CARGA MASIVA",
+      "",
+      "Campos obligatorios: Nombre y Monto",
+      "Tipo: 'Costo Fijo' (default), 'Retiro Socio', o 'Cuota Tarjeta'",
+      "Día del mes: 1-31 (default: 1)",
+      "Categoría: seleccionar de la lista desplegable",
+      "Proveedor: escribir el nombre exacto como aparece en Cajú",
+      "Total cuotas / Cuota actual: solo para tipo 'Cuota Tarjeta'",
+      "Tarjeta ****: últimos 4 dígitos, solo para cuotas",
+      "",
+      "La fila 2 es un ejemplo — reemplazarla con datos reales",
+    ];
+    instructions.forEach((t, i) => {
+      const row = instr.addRow([t]);
+      if (i === 0) row.font = { bold: true, size: 14 };
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "plantilla_recurrentes.xlsx"; a.click();
+    URL.revokeObjectURL(url);
+  }, [categories]);
+
+  const TYPE_LABEL_MAP = { "costo fijo": "fixed_cost", "retiro socio": "owner_withdrawal", "cuota tarjeta": "installment" };
+
+  const handleBulkFile = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setBulkUploading(true);
+
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(await file.arrayBuffer());
+      const ws = wb.getWorksheet("Recurrentes") || wb.getWorksheet(1);
+
+      const rows = [];
+      const errors = [];
+
+      ws.eachRow((row, rowNum) => {
+        if (rowNum === 1) return; // skip header
+        const name = String(row.getCell(1).value || "").trim();
+        const amount = Number(row.getCell(2).value) || 0;
+        if (!name && !amount) return; // skip empty rows
+
+        const typeLabel = String(row.getCell(3).value || "Costo Fijo").trim().toLowerCase();
+        const type = TYPE_LABEL_MAP[typeLabel] || "fixed_cost";
+        const day = Number(row.getCell(4).value) || 1;
+        const category = String(row.getCell(5).value || "Servicios").trim();
+        const supplierName = String(row.getCell(6).value || "").trim();
+        const totalInst = Number(row.getCell(7).value) || undefined;
+        const currentInst = Number(row.getCell(8).value) || undefined;
+        const card = String(row.getCell(9).value || "").trim();
+
+        // Validate
+        if (!name) { errors.push(`Fila ${rowNum}: falta nombre`); return; }
+        if (amount <= 0) { errors.push(`Fila ${rowNum}: monto debe ser > 0`); return; }
+        if (day < 1 || day > 31) { errors.push(`Fila ${rowNum}: día debe ser 1-31`); return; }
+
+        // Match supplier by name
+        let supplier_id = null;
+        if (supplierName) {
+          const match = suppliers.find(s => s.name.toLowerCase() === supplierName.toLowerCase() || s.alias.toLowerCase() === supplierName.toLowerCase());
+          if (match) supplier_id = match.id;
+          else errors.push(`Fila ${rowNum}: proveedor "${supplierName}" no encontrado — se cargará sin proveedor`);
+        }
+
+        rows.push({ name, amount, type, day, category, supplier_id, supplierName, total_installments: totalInst, current_installment: currentInst, card_last4: card });
+      });
+
+      setBulkPreview({ rows, errors });
+    } catch (err) {
+      notify("Error al leer el archivo: " + (err.message || "formato inválido"), "error");
+    } finally {
+      setBulkUploading(false);
+    }
+  }, [suppliers, notify]);
+
+  const confirmBulkUpload = useCallback(async () => {
+    if (!bulkPreview?.rows.length) return;
+    setBulkUploading(true);
+
+    const dbRows = bulkPreview.rows.map(r => ({
+      name: r.name, type: r.type, estimated_amount: r.amount, day_of_month: r.day,
+      category: r.category, supplier_id: r.supplier_id, active: true, is_variable: false,
+      currency: "UYU", frequency: "monthly", total_installments: r.total_installments || null,
+      current_installment: r.current_installment || null, credit_card_last4: r.card_last4 || null,
+    }));
+
+    try {
+      const { data, error } = await supabase.from("recurring_expenses").insert(dbRows).select();
+      if (error) throw error;
+
+      const mapped = (data || []).map(r => ({
+        id: r.id, type: r.type || "fixed_cost", name: r.name || "", amount: r.estimated_amount || 0,
+        currency: "UYU", frequency: "monthly", day: r.day_of_month || 1, category: r.category || "Servicios",
+        active: true, supplier_id: r.supplier_id || null, variable: false,
+        total_installments: r.total_installments || undefined, current_installment: r.current_installment || undefined,
+        card_last4: r.credit_card_last4 || "",
+      }));
+      setRecurring(prev => [...prev, ...mapped]);
+      notify(`${mapped.length} gastos recurrentes creados`);
+      setBulkPreview(null);
+    } catch (err) {
+      notify("Error al guardar: " + (err.message || "error"), "error");
+    } finally {
+      setBulkUploading(false);
+    }
+  }, [bulkPreview, supabase, setRecurring, notify]);
+
   return <div style={{ animation: "fadeIn 0.25s ease" }}>
     {/* Header */}
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
@@ -309,10 +472,45 @@ export default function RecurringView({ recurring, setRecurring, suppliers, invo
     {/* MANAGE TAB (existing functionality)                 */}
     {/* ════════════════════════════════════════════════════ */}
     {tab === "manage" && <>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 12 }}>
-        <Btn variant="secondary" size="sm" onClick={() => setShowCatEditor(!showCatEditor)}>{"\u{1F3F7}"} Categor&iacute;as</Btn>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        <Btn variant="secondary" size="sm" onClick={downloadTemplate}>📥 Plantilla Excel</Btn>
+        <Btn variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={bulkUploading}>{bulkUploading ? "Procesando..." : "📤 Carga masiva"}</Btn>
+        <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleBulkFile} style={{ display: "none" }} />
+        <Btn variant="secondary" size="sm" onClick={() => setShowCatEditor(!showCatEditor)}>🏷 Categorías</Btn>
         <Btn size={mobile ? "sm" : "md"} onClick={() => { setEditId(null); setForm({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" }); setShowForm(!showForm); }}>+ Nuevo</Btn>
       </div>
+
+      {/* Bulk upload preview */}
+      {bulkPreview && <Card style={{ marginBottom: 14, border: "2px solid #e85d04" }}>
+        <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Vista previa — {bulkPreview.rows.length} gastos a crear</h3>
+        {bulkPreview.errors.length > 0 && <div style={{ marginBottom: 10, padding: 8, background: "#fef2f2", borderRadius: 6, fontSize: 11 }}>
+          {bulkPreview.errors.map((e, i) => <div key={i} style={{ color: "#dc2626", marginBottom: 2 }}>⚠ {e}</div>)}
+        </div>}
+        <div style={{ maxHeight: 300, overflowY: "auto", marginBottom: 10 }}>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead><tr style={{ borderBottom: "2px solid #e0e0e6", textAlign: "left" }}>
+              <th style={{ padding: "6px 8px", fontWeight: 600 }}>Nombre</th>
+              <th style={{ padding: "6px 8px", fontWeight: 600 }}>Monto</th>
+              <th style={{ padding: "6px 8px", fontWeight: 600 }}>Tipo</th>
+              <th style={{ padding: "6px 8px", fontWeight: 600 }}>Día</th>
+              <th style={{ padding: "6px 8px", fontWeight: 600 }}>Categoría</th>
+              <th style={{ padding: "6px 8px", fontWeight: 600 }}>Proveedor</th>
+            </tr></thead>
+            <tbody>{bulkPreview.rows.map((r, i) => <tr key={i} style={{ borderBottom: "1px solid #f0f0f4" }}>
+              <td style={{ padding: "5px 8px" }}>{r.name}</td>
+              <td style={{ padding: "5px 8px", fontWeight: 700 }}>{fmt(r.amount)}</td>
+              <td style={{ padding: "5px 8px" }}>{RECURRING_TYPES[r.type]?.label || r.type}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{r.day}</td>
+              <td style={{ padding: "5px 8px" }}>{r.category}</td>
+              <td style={{ padding: "5px 8px", color: r.supplier_id ? "#111" : "#ccc" }}>{r.supplierName || "—"}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+          <Btn variant="secondary" size="sm" onClick={() => setBulkPreview(null)}>Cancelar</Btn>
+          <Btn size="sm" onClick={confirmBulkUpload} disabled={bulkUploading || bulkPreview.rows.length === 0}>{bulkUploading ? "Guardando..." : `Crear ${bulkPreview.rows.length} gastos`}</Btn>
+        </div>
+      </Card>}
 
       {showCatEditor && <Card style={{ marginBottom: 14, border: "1px solid #e0e0e6" }}>
         <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Editar Categor&iacute;as</h3>
