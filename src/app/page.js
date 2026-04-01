@@ -433,7 +433,7 @@ export default function Home() {
 
     // ─── Compress large images client-side ──────────────
     const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB
-    const MAX_DIMENSION = 2000;
+    const MAX_DIMENSION = 3000;
 
     const compressImage = (file) => new Promise((resolve) => {
       const img = new Image();
@@ -461,7 +461,7 @@ export default function Home() {
           const compressed = new File([blob], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
           console.log(`Compressed ${file.name}: ${(file.size / 1024 / 1024).toFixed(1)}MB → ${(compressed.size / 1024 / 1024).toFixed(1)}MB (${width}x${height})`);
           resolve(compressed);
-        }, "image/jpeg", 0.8);
+        }, "image/jpeg", 0.85);
       };
       img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
       img.src = url;
