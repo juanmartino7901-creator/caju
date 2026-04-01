@@ -83,9 +83,9 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
       <div>
         <h1 style={{ fontSize: mobile ? 20 : 22, fontWeight: 800 }}>Inbox</h1>
-        <span style={{ fontSize: 12, color: "#8b8b9e", fontWeight: 500 }}>{hasActiveFilters ? `${filtered.length} resultados para tu b\u00fasqueda` : `${invoices.length} facturas`}</span>
+        <span style={{ fontSize: 12, color: "#8b8b9e", fontWeight: 500 }}>{hasActiveFilters ? `${filtered.length} resultados para tu búsqueda` : `${invoices.length} facturas`}</span>
       </div>
-      <Btn size={mobile ? "sm" : "md"} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>{uploading ? `\u2699\uFE0F ${uploadState.processed}/${uploadState.total}` : "\u{1F4E4} Subir"}</Btn>
+      <Btn size={mobile ? "sm" : "md"} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>{uploading ? `⚙️ ${uploadState.processed}/${uploadState.total}` : "📤 Subir"}</Btn>
     </div>
 
     {showUpload && !uploading && <Card
@@ -155,14 +155,14 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
           } catch (err) {
             notify("Error al guardar: " + (err.message || "error"), "error");
           }
-        }}>{"\u{1F4BE}"} Guardar manualmente</Btn>
+        }}>💾 Guardar manualmente</Btn>
       </div>
     </Card>}
 
     <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
-      <input type="text" placeholder="\u{1F50D}  Buscar proveedor, n\u00famero, monto..." value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none" }} />
+      <input type="text" placeholder="🔍  Buscar proveedor, número, monto..." value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none" }} />
       <button onClick={() => setShowFilters(!showFilters)} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${showFilters || hasActiveFilters ? "#e85d04" : "#e0e0e6"}`, background: showFilters ? "#fff8f3" : "#fff", color: showFilters || hasActiveFilters ? "#e85d04" : "#6b7280", fontSize: 14, cursor: "pointer", flexShrink: 0, fontWeight: 600 }} title="Filtros avanzados">
-        {"\u2699"} {hasActiveFilters && filterSupplier !== "ALL" || filterDateFrom || filterDateTo ? "\u25CF" : ""}
+        ⚙ {hasActiveFilters && filterSupplier !== "ALL" || filterDateFrom || filterDateTo ? "●" : ""}
       </button>
     </div>
 
@@ -241,11 +241,11 @@ export default function Inbox({ invoices, suppliers, filters, setFilters, nav, n
     {filtered.length > PAGE_SIZE && <Pagination page={page} setPage={setPage} totalItems={filtered.length} label={resultLabel} />}
     {filtered.length === 0 && invoices.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}>
       <div style={{ fontSize: 32, opacity: 0.2 }}>{"\u{1F4ED}"}</div>
-      <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No ten\u00e9s facturas todav\u00eda</div>
-      <Btn size="sm" style={{ marginTop: 12 }} onClick={() => setShowUpload(true)}>{"\u{1F4E4}"} Subir tu primera factura</Btn>
+      <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No tenés facturas todavía</div>
+      <Btn size="sm" style={{ marginTop: 12 }} onClick={() => setShowUpload(true)}>📤 Subir tu primera factura</Btn>
     </Card>}
     {filtered.length === 0 && invoices.length > 0 && <Card style={{ textAlign: "center", padding: 28 }}>
-      <div style={{ fontSize: 32, opacity: 0.2 }}>{"\u{1F50D}"}</div>
+      <div style={{ fontSize: 32, opacity: 0.2 }}>🔍</div>
       <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No se encontraron facturas con estos filtros</div>
       <Btn variant="secondary" size="sm" style={{ marginTop: 12 }} onClick={clearAllFilters}>Limpiar filtros</Btn>
     </Card>}
