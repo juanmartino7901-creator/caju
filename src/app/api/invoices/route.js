@@ -84,7 +84,7 @@ export async function POST(request) {
 
     if (!success || !extracted) {
       console.error("Extraction failed:", warnings);
-      return NextResponse.json({ error: "Error procesando la factura con AI", warnings }, { status: 500 });
+      return NextResponse.json({ error: "No se pudo extraer datos — revisá que sea una factura legible", warnings }, { status: 500 });
     }
 
     if (warnings?.length > 0) {
@@ -287,12 +287,18 @@ export async function POST(request) {
     console.error("message:", err.message);
     console.error("stack:", err.stack);
     const isPayloadError = err.message?.includes("body") || err.message?.includes("size") || err.message?.includes("too large") || err.message?.includes("FUNCTION_PAYLOAD_TOO_LARGE");
+    const isTimeout = err.message?.includes("timeout") || err.message?.includes("TIMEOUT") || err.message?.includes("deadline");
+    const isRateLimit = err.status === 429 || err.message?.includes("rate");
+    const friendlyMsg = isPayloadError ? "Archivo demasiado grande (máx ~3MB)"
+      : isTimeout ? "La extracción tardó demasiado — intentá de nuevo"
+      : isRateLimit ? "Demasiadas solicitudes — esperá unos segundos"
+      : (err.message || "Error interno");
     return NextResponse.json({
-      error: isPayloadError ? "Archivo demasiado grande para procesar (máx ~4.5MB en Vercel)" : (err.message || "Error interno"),
+      error: friendlyMsg,
       debug: { name: err.name, message: err.message, stack: err.stack?.split("\n").slice(0, 5).join("\n") },
-    }, { status: 500 });
+    }, { status: isRateLimit ? 429 : 500 });
   }
 }
 
 // Increase timeout for file uploads with AI extraction (Vercel serverless)
-export const maxDuration = 60;
+export const maxDuration = 120;

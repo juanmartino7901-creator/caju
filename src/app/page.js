@@ -432,8 +432,8 @@ export default function Home() {
     const linkedList = [];
 
     // ─── Compress large images client-side ──────────────
-    const MAX_IMAGE_SIZE = 4 * 1024 * 1024; // 4MB
-    const MAX_DIMENSION = 3000;
+    const MAX_IMAGE_SIZE = 3 * 1024 * 1024; // 3MB (Vercel payload limit ~4.5MB after base64 encoding)
+    const MAX_DIMENSION = 2400;
 
     const compressImage = (file) => new Promise((resolve) => {
       const img = new Image();
@@ -467,9 +467,9 @@ export default function Home() {
       img.src = url;
     });
 
-    // Process in batches of 3
-    const CONCURRENCY = 3;
-    const TIMEOUT = 60000;
+    // Process one at a time to avoid Anthropic rate limits
+    const CONCURRENCY = 1;
+    const TIMEOUT = 90000;
 
     const processOne = async (file) => {
       const { data: { session } } = await getSupabase().auth.getSession();
@@ -477,7 +477,7 @@ export default function Home() {
       // Compress large images before upload
       let uploadFile = file;
       const isImage = file.type.startsWith("image/");
-      if (isImage && file.size > MAX_IMAGE_SIZE) {
+      if (isImage) {
         setUploadState(prev => ({ ...prev, compressing: file.name }));
         uploadFile = await compressImage(file);
         setUploadState(prev => ({ ...prev, compressing: null }));
@@ -496,20 +496,22 @@ export default function Home() {
         });
         clearTimeout(timer);
 
+        // Build preview URL for failed files
+        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+
         // Handle non-JSON responses (Vercel 413, HTML error pages, etc.)
         const contentType = res.headers.get("content-type");
         if (!contentType?.includes("application/json")) {
           const text = await res.text();
           console.error(`Upload non-JSON response: ${file.name}`, res.status, text.substring(0, 200));
-          return { success: false, name: file.name, error: `Server error ${res.status}: ${text.substring(0, 100)}` };
+          return { success: false, name: file.name, error: res.status === 413 ? "Archivo demasiado grande" : `Error del servidor (${res.status})`, previewUrl, fileType: file.type };
         }
 
         const data = await res.json();
         if (!res.ok) {
           const errMsg = data.error || `Error ${res.status}`;
-          const debugMsg = data.debug?.message ? ` [${data.debug.message}]` : "";
           console.error(`Upload failed: ${file.name}`, data.debug || data.error);
-          return { success: false, name: file.name, error: errMsg + debugMsg };
+          return { success: false, name: file.name, error: errMsg, previewUrl, fileType: file.type };
         }
         const result = { success: true, name: file.name };
         if (data.supplier_created) result.supplierCreated = data.supplier_name;
@@ -517,8 +519,9 @@ export default function Home() {
         return result;
       } catch (err) {
         clearTimeout(timer);
-        if (err.name === "AbortError") return { success: false, name: file.name, error: "Timeout (60s)", retry: true };
-        return { success: false, name: file.name, error: err.message || "Error de red" };
+        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+        if (err.name === "AbortError") return { success: false, name: file.name, error: "Timeout — intentá de nuevo", retry: true, previewUrl, fileType: file.type };
+        return { success: false, name: file.name, error: err.message || "Error de red", previewUrl, fileType: file.type };
       }
     };
 
@@ -740,13 +743,24 @@ export default function Home() {
                 </div>}
               </div>
 
-              {/* Failed list */}
+              {/* Failed list with previews */}
               {uploadState.results.failed.length > 0 && <>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>Fallidas:</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", marginBottom: 6 }}>Fallidas:</div>
                 {uploadState.results.failed.map((f, i) => (
-                  <div key={i} style={{ fontSize: 11, padding: "4px 0", borderBottom: "1px solid #f3f3f6", display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontWeight: 500 }}>{f.name}</span>
-                    <span style={{ color: "#ef4444", fontSize: 10 }}>{f.error}</span>
+                  <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #f3f3f6", display: "flex", gap: 10, alignItems: "center" }}>
+                    {/* Preview thumbnail */}
+                    <div style={{ width: 56, height: 56, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "#f7f7fa", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #e8e8ec" }}>
+                      {f.previewUrl ? (
+                        <img src={f.previewUrl} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      ) : (
+                        <span style={{ fontSize: 22, opacity: 0.4 }}>{f.fileType === "application/pdf" ? "📄" : "🖼"}</span>
+                      )}
+                    </div>
+                    {/* Info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>
+                      <div style={{ fontSize: 11, color: "#ef4444", marginTop: 2 }}>{f.error}</div>
+                    </div>
                   </div>
                 ))}
               </>}
