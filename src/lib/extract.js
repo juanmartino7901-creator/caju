@@ -13,107 +13,59 @@ function getAnthropic() {
   return anthropic;
 }
 
-// ─── Tool schema for structured extraction ────────────────────
-const EXTRACT_TOOL = {
-  name: "extract_invoice_data",
-  description: "Extraer datos estructurados de una factura o recibo de sueldo uruguayo",
-  input_schema: {
-    type: "object",
-    properties: {
-      doc_type: {
-        type: "string",
-        enum: ["invoice", "payroll"],
-        description: "Tipo de documento: factura o liquidación de sueldo",
-      },
-      emisor_nombre: {
-        type: "string",
-        description: "Razón social del emisor (facturas) o empresa empleadora (recibos)",
-      },
-      emisor_rut: {
-        type: "string",
-        description: "RUT del emisor/empresa (12 dígitos, sin puntos ni guiones)",
-      },
-      comprador_nombre: {
-        type: "string",
-        description: "Razón social del comprador (facturas) o nombre del empleado (recibos)",
-      },
-      comprador_rut: {
-        type: "string",
-        description: "RUT del comprador o CI del empleado",
-      },
-      invoice_number: {
-        type: "string",
-        description: "Número de factura (ej: A 00017847) o LIQ-MES-AÑO-CI para recibos",
-      },
-      invoice_series: {
-        type: "string",
-        description: "Serie de factura (A, B, E) o LIQ para recibos",
-      },
-      issue_date: {
-        type: "string",
-        description: "Fecha de emisión en formato YYYY-MM-DD",
-      },
-      due_date: {
-        type: "string",
-        description: "Fecha de vencimiento en formato YYYY-MM-DD, o null si CONTADO",
-      },
-      currency: {
-        type: "string",
-        enum: ["UYU", "USD"],
-        description: "Moneda del documento",
-      },
-      subtotal: {
-        type: "number",
-        description: "Monto sin IVA (facturas) o total haberes bruto (recibos). Formato JSON: 3235.01",
-      },
-      tax_amount: {
-        type: "number",
-        description: "IVA (facturas) o total descuentos (recibos). Siempre positivo. Formato JSON: 710.70",
-      },
-      total: {
-        type: "number",
-        description: "Total a pagar (facturas) o líquido a cobrar (recibos). Formato JSON: 3945.71",
-      },
-      cae: {
-        type: "string",
-        description: "CAE de la factura electrónica, o null si no aplica",
-      },
-      payment_terms: {
-        type: "string",
-        description: "Condiciones de pago: CONTADO, 30 días, MENSUAL, etc.",
-      },
-      line_items: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            description: { type: "string" },
-            quantity: { type: "number" },
-            unit_price: { type: "number" },
-            amount: { type: "number" },
-          },
-          required: ["description", "amount"],
-        },
-        description: "Líneas del documento. En recibos: haberes positivos, descuentos negativos",
-      },
-      confidence: {
+// ─── JSON schema for structured outputs ───────────────────────
+// Nullable donde el modelo puede omitir. Strict: additionalProperties:false + required completo.
+const N = (t) => ({ type: [t, "null"] });
+const EXTRACT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    doc_type: { type: "string", enum: ["invoice", "payroll"] },
+    emisor_nombre: N("string"),
+    emisor_rut: N("string"),
+    comprador_nombre: N("string"),
+    comprador_rut: N("string"),
+    invoice_number: N("string"),
+    invoice_series: N("string"),
+    issue_date: N("string"),
+    due_date: N("string"),
+    currency: { type: "string", enum: ["UYU", "USD"] },
+    subtotal: N("number"),
+    tax_amount: N("number"),
+    total: { type: "number" },
+    cae: N("string"),
+    payment_terms: N("string"),
+    line_items: {
+      type: ["array", "null"],
+      items: {
         type: "object",
+        additionalProperties: false,
         properties: {
-          emisor_nombre: { type: "number", description: "0.0 a 1.0" },
-          emisor_rut: { type: "number", description: "0.0 a 1.0" },
-          invoice_number: { type: "number", description: "0.0 a 1.0" },
-          issue_date: { type: "number", description: "0.0 a 1.0" },
-          due_date: { type: "number", description: "0.0 a 1.0" },
-          total: { type: "number", description: "0.0 a 1.0" },
-          tax_amount: { type: "number", description: "0.0 a 1.0" },
-          currency: { type: "number", description: "0.0 a 1.0" },
+          description: { type: "string" },
+          quantity: N("number"),
+          unit_price: N("number"),
+          amount: { type: "number" },
         },
-        required: ["emisor_nombre", "emisor_rut", "invoice_number", "issue_date", "due_date", "total", "tax_amount", "currency"],
-        description: "Score de confianza para cada campo (0.0 = no legible, 1.0 = seguro)",
+        required: ["description", "quantity", "unit_price", "amount"],
       },
     },
-    required: ["doc_type", "currency", "total", "confidence"],
+    confidence: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        emisor_nombre: { type: "number" },
+        emisor_rut: { type: "number" },
+        invoice_number: { type: "number" },
+        issue_date: { type: "number" },
+        due_date: { type: "number" },
+        total: { type: "number" },
+        tax_amount: { type: "number" },
+        currency: { type: "number" },
+      },
+      required: ["emisor_nombre", "emisor_rut", "invoice_number", "issue_date", "due_date", "total", "tax_amount", "currency"],
+    },
   },
+  required: ["doc_type", "emisor_nombre", "emisor_rut", "comprador_nombre", "comprador_rut", "invoice_number", "invoice_series", "issue_date", "due_date", "currency", "subtotal", "tax_amount", "total", "cae", "payment_terms", "line_items", "confidence"],
 };
 
 // ─── System prompt ────────────────────────────────────────────
@@ -122,7 +74,7 @@ const SYSTEM_PROMPT = `Sos un extractor de datos de documentos financieros urugu
 1. FACTURAS (e-factura, CFE, ticket) — el caso más común
 2. LIQUIDACIONES DE SUELDO (recibos de haberes) — reconocibles por campos como "Haberes", "Descuentos", "Líquido a Cobrar", "BPS", "IRPF", "Sueldo Básico", "Aportes Jubilatorios", "Fonasa", "FRL"
 
-Analizá la imagen/documento, determiná qué tipo es, y usá la herramienta extract_invoice_data para devolver los datos estructurados.
+Analizá la imagen/documento con MUCHO cuidado, prestando especial atención a la LETRA CHICA (RUT de 12 dígitos, número de factura, y montos), determiná qué tipo es, y devolvé los datos estructurados.
 
 === REGLAS PARA RECIBOS DE SUELDO ===
 - emisor_nombre = nombre de la EMPRESA (ej: "Renenutet SAS"), NO del empleado
@@ -167,17 +119,18 @@ export async function extractInvoiceData(buffer, mimeType) {
   }
   content.push({ type: "text", text: "Extraé los datos de este documento financiero uruguayo." });
 
-  // Call Claude with tool_use (retry once on failure)
+  // Call Claude (Opus 4.8, high-res vision, structured outputs + adaptive thinking).
+  // Retry once on API error.
   let response;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       response = await getAnthropic().messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
+        model: "claude-opus-4-8",
+        max_tokens: 8192,
+        thinking: { type: "adaptive" },
+        output_config: { effort: "high", format: { type: "json_schema", schema: EXTRACT_SCHEMA } },
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content }],
-        tools: [EXTRACT_TOOL],
-        tool_choice: { type: "tool", name: "extract_invoice_data" },
       });
       break; // success
     } catch (err) {
@@ -190,28 +143,24 @@ export async function extractInvoiceData(buffer, mimeType) {
     }
   }
 
-  // Extract tool input from response
-  const toolBlock = response.content.find((b) => b.type === "tool_use" && b.name === "extract_invoice_data");
-  if (!toolBlock) {
-    // Fallback: try to parse text response as JSON
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (textBlock) {
-      try {
-        const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          const { data, warnings } = validateAndFix(parsed);
-          return { success: true, data, warnings };
-        }
-      } catch {
-        // fall through
-      }
-    }
-    return { success: false, data: null, warnings: ["AI did not return structured data"] };
+  // Safety classifiers can decline (rare for invoices)
+  if (response.stop_reason === "refusal") {
+    return { success: false, data: null, warnings: ["AI rechazó el documento (clasificador de seguridad)"] };
   }
 
-  const extracted = toolBlock.input;
-  const { data, warnings } = validateAndFix(extracted);
+  // With structured outputs, the text block is schema-valid JSON.
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (!textBlock?.text) {
+    return { success: false, data: null, warnings: ["AI did not return structured data"] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(textBlock.text);
+  } catch (e) {
+    return { success: false, data: null, warnings: [`Respuesta no es JSON válido: ${e.message}`] };
+  }
+
+  const { data, warnings } = validateAndFix(parsed);
   return { success: true, data, warnings };
 }
 

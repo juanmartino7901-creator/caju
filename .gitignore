@@ -5,3 +5,6 @@ node_modules/
 *.log
 .DS_Store
 out/
+
+# Scratch: facturas de prueba y experimentos (datos sensibles, no versionar)
+_scratch/
