@@ -44,6 +44,7 @@ export default function RecurringView({ recurring, setRecurring, suppliers, invo
   const [showCatEditor, setShowCatEditor] = useState(false);
   const [newCat, setNewCat] = useState("");
   const [form, setForm] = useState({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" });
+  const [saving, setSaving] = useState(false);
   const [linkingId, setLinkingId] = useState(null); // instance id being linked
   const [paidForm, setPaidForm] = useState(null); // { instanceId, amount, date }
 
@@ -141,6 +142,7 @@ export default function RecurringView({ recurring, setRecurring, suppliers, invo
   const total = recurring.filter(r => r.active).reduce((s, r) => s + r.amount, 0);
   const startEdit = item => { setForm({ type: item.type, name: item.name, amount: String(item.amount), day: String(item.day), supplier_id: item.supplier_id || "", category: item.category, total_installments: item.total_installments ? String(item.total_installments) : "", current_installment: item.current_installment ? String(item.current_installment) : "", card_last4: item.card_last4 || "" }); setEditId(item.id); setShowForm(true); };
   const save = async () => {
+    setSaving(true);
     const item = { ...form, amount: Number(form.amount), day: Number(form.day), active: true, variable: false, total_installments: form.total_installments ? Number(form.total_installments) : undefined, current_installment: form.current_installment ? Number(form.current_installment) : undefined };
     try {
       const dbRow = {
@@ -166,6 +168,7 @@ export default function RecurringView({ recurring, setRecurring, suppliers, invo
         setRecurring(prev => [...prev, { ...item, id: `r${Date.now()}` }]);
       }
     }
+    setSaving(false);
     setShowForm(false); setEditId(null);
   };
 
@@ -552,10 +555,17 @@ export default function RecurringView({ recurring, setRecurring, suppliers, invo
             <Input label="Tarjeta ****" value={form.card_last4} onChange={e => setForm(f => ({ ...f, card_last4: e.target.value }))} />
           </>}
         </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={save} disabled={!form.name.trim() || !form.amount || Number(form.amount) <= 0} style={!form.name.trim() || !form.amount || Number(form.amount) <= 0 ? { opacity: 0.5, cursor: "not-allowed" } : {}}>Guardar</Btn></div>
+        <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={save} disabled={saving || !form.name.trim() || !form.amount || Number(form.amount) <= 0} style={saving || !form.name.trim() || !form.amount || Number(form.amount) <= 0 ? { opacity: 0.5, cursor: "not-allowed" } : {}}>{saving ? "Guardando..." : "Guardar"}</Btn></div>
       </Card>}
 
-      {Object.entries(RECURRING_TYPES).map(([key, type]) => <div key={key} style={{ marginBottom: 16 }}>
+      {recurring.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}>
+        <div style={{ fontSize: 32, opacity: 0.2 }}>🔁</div>
+        <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>No tenés gastos recurrentes todavía</div>
+        <div style={{ fontSize: 11, color: "#b0b0c0", marginTop: 2 }}>Cargá tus costos fijos, cuotas y retiros para verlos cada mes</div>
+        <Btn size="sm" style={{ marginTop: 12 }} onClick={() => { setEditId(null); setForm({ type: "fixed_cost", name: "", amount: "", day: "1", supplier_id: "", category: "Servicios", total_installments: "", current_installment: "", card_last4: "" }); setShowForm(true); }}>+ Agregar el primero</Btn>
+      </Card>}
+
+      {recurring.length > 0 && Object.entries(RECURRING_TYPES).map(([key, type]) => <div key={key} style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}><span style={{ fontSize: 16 }}>{type.icon}</span><h2 style={{ fontSize: 14, fontWeight: 700 }}>{type.label}</h2><span style={{ fontSize: 11, color: "#8b8b9e" }}>&mdash; {fmt(grouped[key]?.reduce((s, r) => s + r.amount, 0) || 0)}/mes</span></div>
         {grouped[key]?.map(item => {
           const sup = item.supplier_id ? getSup(suppliers, item.supplier_id) : null;

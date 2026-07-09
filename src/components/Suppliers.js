@@ -10,6 +10,7 @@ export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobi
   const [dedupPreview, setDedupPreview] = useState(null); // GET result
   const [dedupLoading, setDedupLoading] = useState(false);
   const [dedupResult, setDedupResult] = useState(null); // POST result
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", alias: "", tax_id: "", category: "Insumos", bank: "Itaú", account_type: "CC", account_number: "", currency: "UYU", phone: "", email: "", contact: "", payment_terms: "30 días", notes: "" });
   const filtered = suppliers.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.alias?.toLowerCase().includes(search.toLowerCase()) || s.tax_id?.includes(search));
 
@@ -21,6 +22,7 @@ export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobi
   };
 
   const saveSupplier = async () => {
+    setSaving(true);
     try {
       const dbRow = {
         name: form.name, alias: form.alias, tax_id: form.tax_id, category: form.category,
@@ -35,6 +37,7 @@ export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobi
       console.error("Cajú: Error saving supplier", err);
       setSuppliers(p => [...p, { ...form, id: `s${Date.now()}` }]);
     }
+    setSaving(false);
     setShowForm(false);
   };
 
@@ -147,7 +150,7 @@ export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobi
         <Select label="Cond. Pago" value={form.payment_terms} onChange={e => setForm(f => ({ ...f, payment_terms: e.target.value }))}><option>Contado</option><option>15 días</option><option>30 días</option><option>60 días</option><option>Mensual</option></Select>
         <Input label="Notas" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
       </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={saveSupplier} disabled={!form.name.trim() || !form.tax_id.trim()} style={!form.name.trim() || !form.tax_id.trim() ? { opacity: 0.5, cursor: "not-allowed" } : {}}>Guardar</Btn></div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "flex-end" }}><Btn variant="secondary" size="sm" onClick={() => setShowForm(false)}>Cancelar</Btn><Btn size="sm" onClick={saveSupplier} disabled={saving || !form.name.trim() || !form.tax_id.trim()} style={saving || !form.name.trim() || !form.tax_id.trim() ? { opacity: 0.5, cursor: "not-allowed" } : {}}>{saving ? "Guardando..." : "Guardar"}</Btn></div>
     </Card>}
 
     <input type="text" placeholder="🔍  Buscar proveedor, RUT..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #e0e0e6", fontSize: 14, outline: "none", marginBottom: 10 }} />
@@ -182,5 +185,13 @@ export default function Suppliers({ suppliers, setSuppliers, invoices, nav, mobi
         </Card>;
       })}
     </div>
+
+    {filtered.length === 0 && <Card style={{ textAlign: "center", padding: 28 }}>
+      <div style={{ fontSize: 32, opacity: 0.2 }}>{suppliers.length === 0 ? "🏢" : "🔍"}</div>
+      <div style={{ fontSize: 13, color: "#8b8b9e", marginTop: 4 }}>{suppliers.length === 0 ? "No tenés proveedores todavía" : "Ningún proveedor coincide con la búsqueda"}</div>
+      {suppliers.length === 0
+        ? <Btn size="sm" style={{ marginTop: 12 }} onClick={() => setShowForm(true)}>+ Agregar el primero</Btn>
+        : <Btn variant="secondary" size="sm" style={{ marginTop: 12 }} onClick={() => setSearch("")}>Limpiar búsqueda</Btn>}
+    </Card>}
   </div>;
 }
