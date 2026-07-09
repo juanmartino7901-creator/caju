@@ -7,6 +7,26 @@ import { Card, Btn, Input, Select, Badge, DueBadge, Pagination, PAGE_SIZE } from
 const fmtDate = fmtDateShort;
 const getSup = (suppliers, id) => suppliers.find(s => s.id === id) || {};
 
+// ─── XLSX export helper (exceljs, bundled — no external CDN) ──
+// sheets: [{ name, rows: [{header: value}], widths: [n] }]. Row keys become headers.
+async function downloadXlsx(sheets, filename) {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  for (const { name, rows, widths } of sheets) {
+    const ws = wb.addWorksheet(name);
+    if (!rows.length) continue;
+    const headers = Object.keys(rows[0]);
+    ws.columns = headers.map((h, i) => ({ header: h, key: h, width: widths?.[i] ?? 14 }));
+    ws.getRow(1).font = { bold: true };
+    rows.forEach(r => ws.addRow(r));
+  }
+  const buf = await wb.xlsx.writeBuffer();
+  const url = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Payables({ invoices, suppliers, recurring, onUpdate, sel, setSel, notify, mobile }) {
   const [showHistory, setShowHistory] = useState(false);
   const [paySearch, setPaySearch] = useState("");
@@ -74,14 +94,6 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     const selected = sel.size > 0 ? payable.filter(i => sel.has(i.id)) : payable;
     if (selected.length === 0) { notify("No hay facturas para exportar", "error"); return; }
 
-    if (!window.XLSX) {
-      const script = document.createElement("script");
-      script.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
-      document.head.appendChild(script);
-      await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
-    }
-    const XLSX = window.XLSX;
-
     const detailRows = selected.map(inv => {
       const sup = getSup(suppliers, inv.supplier_id);
       return {
@@ -105,16 +117,11 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     }));
     summaryRows.push({ "Proveedor": "TOTAL", "Alias": "", "RUT": "", "Facturas": selected.length, "Total": selected.reduce((s, i) => s + i.total, 0) });
 
-    const wb = XLSX.utils.book_new();
-    const ws1 = XLSX.utils.json_to_sheet(detailRows);
-    const ws2 = XLSX.utils.json_to_sheet(summaryRows);
-    ws1["!cols"] = [{ wch: 30 }, { wch: 15 }, { wch: 14 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
-    ws2["!cols"] = [{ wch: 30 }, { wch: 15 }, { wch: 14 }, { wch: 10 }, { wch: 14 }];
-    XLSX.utils.book_append_sheet(wb, ws1, "Detalle");
-    XLSX.utils.book_append_sheet(wb, ws2, "Resumen");
-
     const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    XLSX.writeFile(wb, `pagos_${today}.xlsx`);
+    await downloadXlsx([
+      { name: "Detalle", rows: detailRows, widths: [30, 15, 14, 15, 12, 12, 8, 12, 12, 12, 12, 12, 12] },
+      { name: "Resumen", rows: summaryRows, widths: [30, 15, 14, 10, 14] },
+    ], `pagos_${today}.xlsx`);
     notify(`📊 Excel generado: ${selected.length} facturas`);
   };
 
@@ -177,27 +184,16 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     const rows = buildReportRows();
     if (rows.length === 0) { notify("No hay pagos para exportar", "error"); return; }
 
-    if (!window.XLSX) {
-      const script = document.createElement("script");
-      script.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
-      document.head.appendChild(script);
-      await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
-    }
-    const XLSX = window.XLSX;
-
     const sheetRows = rows.map(r => ({
       "Fecha de Pago": r.fecha_pago, "Proveedor": r.proveedor, "N° Factura": r.nro_factura,
       "Monto": r.monto, "Moneda": r.moneda, "Estado": r.estado,
     }));
     sheetRows.push({ "Fecha de Pago": "", "Proveedor": "", "N° Factura": "TOTAL", "Monto": rows.reduce((s, r) => s + r.monto, 0), "Moneda": "", "Estado": "" });
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(sheetRows);
-    ws["!cols"] = [{ wch: 14 }, { wch: 25 }, { wch: 18 }, { wch: 14 }, { wch: 8 }, { wch: 12 }];
-    XLSX.utils.book_append_sheet(wb, ws, "Reporte Pagos");
-
     const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    XLSX.writeFile(wb, `reporte_pagos_${today}.xlsx`);
+    await downloadXlsx([
+      { name: "Reporte Pagos", rows: sheetRows, widths: [14, 25, 18, 14, 8, 12] },
+    ], `reporte_pagos_${today}.xlsx`);
     notify(`📊 Excel generado: ${rows.length} pagos — ${reportRangeLabel()}`);
   };
 
@@ -205,20 +201,8 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     const rows = buildReportRows();
     if (rows.length === 0) { notify("No hay pagos para exportar", "error"); return; }
 
-    if (!window.jspdf) {
-      const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js";
-      document.head.appendChild(script);
-      await new Promise((resolve, reject) => { script.onload = resolve; script.onerror = reject; });
-    }
-    if (!window.jspdf?.jsPDF?.API?.autoTable) {
-      const script2 = document.createElement("script");
-      script2.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js";
-      document.head.appendChild(script2);
-      await new Promise((resolve, reject) => { script2.onload = resolve; script2.onerror = reject; });
-    }
-
-    const { jsPDF } = window.jspdf;
+    const { jsPDF } = await import("jspdf");
+    const { default: autoTable } = await import("jspdf-autotable");
     const doc = new jsPDF();
 
     // Header
@@ -249,7 +233,7 @@ export default function Payables({ invoices, suppliers, recurring, onUpdate, sel
     const tableBody = rows.map(r => [r.fecha_pago, r.proveedor, r.nro_factura, fmt(r.monto, r.moneda), r.moneda]);
     tableBody.push(["", "", "TOTAL", fmt(totalAmount), ""]);
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 68,
       head: [["Fecha Pago", "Proveedor", "N° Factura", "Monto", "Moneda"]],
       body: tableBody,
